@@ -44,6 +44,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    volumes:
+      - ~/.aws:/root/.aws:ro
+    environment:
+      - AWS_PROFILE=default
     networks:
       - sentinel_net
 

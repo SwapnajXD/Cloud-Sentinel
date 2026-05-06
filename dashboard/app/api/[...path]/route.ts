@@ -4,7 +4,7 @@ const BACKEND_URL = process.env.BACKEND_URL || 'http://gateway:3000';
 
 async function proxyRequest(request: Request, path: string[]) {
   const url = new URL(request.url);
-  const target = new URL(`${BACKEND_URL}/${path.join('/')}`);
+  const target = new URL(`${BACKEND_URL}/api/${path.join('/')}`);
   target.search = url.search;
 
   const headers = new Headers(request.headers);
