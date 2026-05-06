@@ -4,6 +4,18 @@
 
 Cloud-Sentinel is a microservices-based AWS auditing platform designed to scan and monitor your AWS infrastructure for security issues. It provides a secure, scalable architecture for conducting automated AWS infrastructure audits with a modern web dashboard and powerful REST API.
 
+## Resume Positioning
+
+Use this project as either of these, depending on the role:
+
+**Backend-focused:**
+- Built a backend-heavy AWS auditing platform with REST APIs for authentication, task queueing, report retrieval, and account management.
+- Implemented JWT auth, PostgreSQL persistence, Redis-based job processing, and a Python worker that stores audit results.
+
+**DevOps-focused:**
+- Deployed a containerized multi-service stack with Docker Compose, Nginx reverse proxying, Redis, PostgreSQL, a Next.js dashboard, an Express gateway, and a Python worker.
+- Managed AWS credentials through environment-based configuration and debugged cross-service deployment issues across the frontend, API, and worker.
+
 ---
 
 ## Architecture

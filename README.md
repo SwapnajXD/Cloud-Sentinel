@@ -28,6 +28,18 @@ curl http://localhost/health
 - Store audit results in PostgreSQL
 - Web dashboard for managing audits and viewing reports
 
+## Resume Positioning
+
+Use this project as either of these, depending on the role:
+
+**Backend-focused:**
+- Built a backend-heavy AWS auditing platform with REST APIs for authentication, task queueing, report retrieval, and account management.
+- Implemented JWT auth, PostgreSQL persistence, Redis-based job processing, and a Python worker that stores audit results.
+
+**DevOps-focused:**
+- Deployed a containerized multi-service stack with Docker Compose, Nginx reverse proxying, Redis, PostgreSQL, a Next.js dashboard, an Express gateway, and a Python worker.
+- Managed AWS credentials through environment-based configuration and debugged cross-service deployment issues across the frontend, API, and worker.
+
 ## Tech Stack
 
 - **Dashboard**: Next.js 14.2 (React, TypeScript)
