@@ -401,20 +401,4 @@ Cloud-Sentinel/
 
 ---
 
-## License
-
-See LICENSE file for details.
-
----
-
-## Support
-
-For issues or questions:
-1. Check logs: `sudo docker compose logs <service>`
-2. Open an issue on GitHub
-3. Review the conversation history in this project
-
----
-
 **Last Updated:** May 6, 2026  
-**TypeScript Migration:** Complete ✅
