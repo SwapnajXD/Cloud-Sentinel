@@ -3,7 +3,7 @@ import './globals.css';
 
 export const metadata: Metadata = {
   title: 'Cloud-Sentinel Dashboard',
-  description: 'Audit Cloud-Sentinel users, reports, and queued AWS scans from a clean Next.js dashboard.',
+  description: 'Cloud-Sentinel dashboard for AWS audits, report history, and account management.',
 };
 
 export default function RootLayout({

@@ -241,26 +241,34 @@ export function DashboardShell() {
 
   return (
     <main className="shell">
+      <header className="topbar">
+        <div className="brand-block">
+          <span className="eyebrow">Cloud-Sentinel</span>
+          <h1>Audit command center</h1>
+          <p>Run AWS scans, inspect history, and manage access from one clean surface.</p>
+        </div>
+
+        <div className="topbar-actions">
+          <span className={`session-pill ${token ? 'live' : 'idle'}`}>{token ? `Signed in as ${email}` : 'Signed out'}</span>
+          <button className="ghost" onClick={() => fetchReports()} disabled={!token || loadingReports}>
+            Refresh reports
+          </button>
+          <button className="ghost" onClick={handleLogout} disabled={!token}>
+            Logout
+          </button>
+        </div>
+      </header>
+
       <section className="hero">
         <div className="hero-copy">
-          <span className="eyebrow">Cloud-Sentinel</span>
-          <h1>Award your cloud with a sharper audit command center.</h1>
-          <p>
-            Register, queue scans, review historical reports, and remove accounts from a single Next.js dashboard built
-            for fast AWS security workflows.
-          </p>
-          <div className="hero-actions">
-            <button className="primary" onClick={() => fetchReports()} disabled={!token || loadingReports}>
-              Refresh reports
-            </button>
-            <button className="ghost" onClick={handleLogout} disabled={!token}>
-              Logout
-            </button>
+          <div className="hero-kicker">
+            <span>Overview</span>
+            <span>{loadingReports || loadingAction ? 'Working…' : status}</span>
           </div>
+
           <div className="status-bar">
-            <strong>Status</strong>
+            <strong>Current state</strong>
             <span>{status}</span>
-            {loadingReports || loadingAction ? <em>Working...</em> : null}
           </div>
           {error ? <div className="alert error">{error}</div> : null}
         </div>
@@ -270,7 +278,7 @@ export function DashboardShell() {
             <StatCard key={stat.label} {...stat} />
           ))}
           <div className="mini-card">
-            <p>API surface</p>
+            <p>Core routes</p>
             <ul>
               <li>/api/register</li>
               <li>/api/login</li>
@@ -282,9 +290,10 @@ export function DashboardShell() {
         </div>
       </section>
 
-      <section className="grid">
+      <section className="grid actions-grid">
         <article className="card">
           <h2>Register</h2>
+          <p className="card-copy">Create a user before signing in or queueing any audits.</p>
           <form onSubmit={handleRegister} className="stack">
             <input
               type="email"
@@ -306,6 +315,7 @@ export function DashboardShell() {
 
         <article className="card">
           <h2>Login</h2>
+          <p className="card-copy">Authenticate to unlock report history and audit controls.</p>
           <form onSubmit={handleLogin} className="stack">
             <input
               type="email"
@@ -327,6 +337,7 @@ export function DashboardShell() {
 
         <article className="card">
           <h2>Launch audit</h2>
+          <p className="card-copy">Send a scope to the worker queue and review the report after it completes.</p>
           <div className="stack">
             <input
               type="text"
@@ -340,8 +351,9 @@ export function DashboardShell() {
           </div>
         </article>
 
-        <article className="card">
+        <article className="card danger-card">
           <h2>Delete account</h2>
+          <p className="card-copy">Permanently delete the user and all audit reports.</p>
           <div className="stack">
             <input
               type="password"
