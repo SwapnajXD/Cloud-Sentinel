@@ -1,5 +1,7 @@
 node_modules/
+__pycache__/
 .env
+.venv/
 .env.local
 dist/
 npm-debug.log
