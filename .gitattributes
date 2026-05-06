@@ -1,0 +1,4 @@
+# Ignore generated and dependency files in language statistics
+package-lock.json linguist-generated=true
+requirements.txt linguist-generated=true
+dist/ linguist-generated=true
