@@ -10,8 +10,10 @@ services:
     ports:
       - "3000:3000"
     depends_on:
-      - db
-      - redis
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - sentinel_net
 
@@ -22,8 +24,10 @@ services:
     image: cloud-sentinel-worker:latest
     env_file: .env
     depends_on:
-      - redis
-      - db
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
     networks:
       - sentinel_net
 
@@ -48,6 +52,12 @@ services:
       - pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d cloud_sentinel"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
     networks:
       - sentinel_net
 
@@ -55,7 +65,8 @@ services:
     image: nginx:stable-alpine
     restart: unless-stopped
     depends_on:
-      - gateway
+      gateway:
+        condition: service_started
     ports:
       - "80:80"
     volumes:

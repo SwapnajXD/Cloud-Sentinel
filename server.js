@@ -44,9 +44,32 @@ async function initDb() {
 const redisClient = createClient({ url: process.env.REDIS_URL });
 redisClient.on('error', (err) => console.error('Redis Client Error', err));
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForPostgres(maxAttempts = 30, delayMs = 2000) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    try {
+      await pool.query('SELECT 1');
+      return;
+    } catch (err) {
+      lastError = err;
+      console.warn(`Postgres not ready yet (attempt ${attempt}/${maxAttempts})`);
+      if (attempt < maxAttempts) {
+        await sleep(delayMs);
+      }
+    }
+  }
+
+  throw lastError;
+}
+
 async function start() {
   try {
-    await pool.connect();
+    await waitForPostgres();
     await initDb();
     await redisClient.connect();
 
