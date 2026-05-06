@@ -120,7 +120,8 @@ export function DashboardShell() {
         });
         const payload = (await response.json()) as ReportsResponse | ActionResponse;
         if (!response.ok) {
-          throw new Error(payload.error || 'Failed to fetch reports');
+          const errorMessage = 'error' in payload ? payload.error : undefined;
+          throw new Error(errorMessage || 'Failed to fetch reports');
         }
         setReports((payload as ReportsResponse).reports);
         setStatus(`Loaded ${(payload as ReportsResponse).count} report(s).`);
