@@ -39,15 +39,13 @@ services:
       dockerfile: Dockerfile.worker
     image: cloud-sentinel-worker:latest
     env_file: .env
+    environment:
+      - PYTHONUNBUFFERED=1
     depends_on:
       db:
         condition: service_healthy
       redis:
         condition: service_started
-    volumes:
-      - ~/.aws:/root/.aws:ro
-    environment:
-      - AWS_PROFILE=default
     networks:
       - sentinel_net
 

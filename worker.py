@@ -3,6 +3,9 @@ import os
 import time
 from datetime import datetime, timezone
 
+os.environ.pop("AWS_PROFILE", None)
+os.environ.pop("AWS_DEFAULT_PROFILE", None)
+
 import boto3
 import psycopg2
 import redis
@@ -11,6 +14,11 @@ import redis
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgres://postgres:postgres@db:5432/cloud_sentinel")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+
+# Debug: Check if AWS credentials are loaded
+AWS_KEY = os.getenv("AWS_ACCESS_KEY_ID", "")
+AWS_SECRET = os.getenv("AWS_SECRET_ACCESS_KEY", "")
+AWS_TOKEN = os.getenv("AWS_SESSION_TOKEN", "")
 
 
 def get_redis_client():
@@ -22,7 +30,18 @@ def get_db_connection():
 
 
 def get_aws_clients():
-    session = boto3.session.Session(region_name=AWS_REGION)
+    # Debug: Check what credentials we have
+    print(f"DEBUG: AWS_KEY={AWS_KEY[:10] if AWS_KEY else 'MISSING'}...")
+    print(f"DEBUG: AWS_SECRET={AWS_SECRET[:10] if AWS_SECRET else 'MISSING'}...")
+    print(f"DEBUG: AWS_TOKEN={'PRESENT' if AWS_TOKEN else 'MISSING'}")
+    print(f"DEBUG: AWS_REGION={AWS_REGION}")
+    
+    session = boto3.session.Session(
+        region_name=AWS_REGION,
+        aws_access_key_id=AWS_KEY if AWS_KEY else None,
+        aws_secret_access_key=AWS_SECRET if AWS_SECRET else None,
+        aws_session_token=AWS_TOKEN if AWS_TOKEN else None,
+    )
     return {
         "s3": session.client("s3"),
         "ec2": session.client("ec2"),

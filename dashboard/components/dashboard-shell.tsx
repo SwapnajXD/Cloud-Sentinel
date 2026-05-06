@@ -72,6 +72,16 @@ export function DashboardShell() {
   const [loadingReports, startReportsTransition] = useTransition();
   const [loadingAction, startActionTransition] = useTransition();
 
+  function clearExpiredSession(message: string) {
+    window.localStorage.removeItem('token');
+    window.localStorage.removeItem('email');
+    setToken(null);
+    setEmail('');
+    setReports([]);
+    setDeletePassword('');
+    setStatus(message);
+  }
+
   useEffect(() => {
     const savedToken = window.localStorage.getItem('token');
     const savedEmail = window.localStorage.getItem('email') || '';
@@ -120,6 +130,10 @@ export function DashboardShell() {
         });
         const payload = (await response.json()) as ReportsResponse | ActionResponse;
         if (!response.ok) {
+          if (response.status === 401) {
+            clearExpiredSession('Session expired. Please sign in again.');
+            return;
+          }
           const errorMessage = 'error' in payload ? payload.error : undefined;
           throw new Error(errorMessage || 'Failed to fetch reports');
         }
@@ -144,6 +158,11 @@ export function DashboardShell() {
       },
       body: JSON.stringify(body),
     });
+
+    if (response.status === 401) {
+      clearExpiredSession('Session expired. Please sign in again.');
+      throw new Error('Session expired. Please sign in again.');
+    }
 
     return (await response.json()) as AuthResponse | ActionResponse | ReportsResponse;
   }
