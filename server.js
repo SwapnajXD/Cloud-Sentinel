@@ -60,9 +60,7 @@ async function start() {
 }
 
 // Helpers
-function signToken(payload) {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
-}
+const { signToken, authenticateJWT } = require('./lib/auth');
 
 async function findUserByEmail(email) {
   const res = await pool.query('SELECT id, email, password FROM users WHERE email = $1', [email]);
@@ -109,20 +107,6 @@ app.post('/api/login', async (req, res) => {
     res.status(500).json({ error: 'internal server error' });
   }
 });
-
-// Auth middleware
-function authenticateJWT(req, res, next) {
-  const auth = req.headers.authorization;
-  if (!auth || !auth.startsWith('Bearer ')) return res.status(401).json({ error: 'missing token' });
-  const token = auth.split(' ')[1];
-  try {
-    const payload = jwt.verify(token, JWT_SECRET);
-    req.user = payload;
-    next();
-  } catch (err) {
-    return res.status(401).json({ error: 'invalid token' });
-  }
-}
 
 // Audit endpoint: push a task to Redis list
 app.post('/api/audit', authenticateJWT, async (req, res) => {
