@@ -13,6 +13,7 @@ const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'please-change-this-in-prod';
 
 const app = express();
+app.set('trust proxy', 1);
 app.use(helmet());
 app.use(express.json());
 app.use(morgan('combined'));

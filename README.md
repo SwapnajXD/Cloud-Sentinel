@@ -1,59 +1,119 @@
-# README: Cloud-Sentinel
-### Distributed Infrastructure Auditor & Security Gateway
+# Cloud-Sentinel
 
-**Cloud-Sentinel** is a microservices-based platform designed to automate AWS infrastructure health checks. It demonstrates the integration of a secure Node.js API, a Python-based background worker, and Redis-driven task distribution.
+Cloud-Sentinel is a small distributed AWS auditing platform built with:
 
-## 🏗 System Architecture
-1.  **Auth Service (Node.js/Express):** Handles JWT authentication and acts as the API Gateway.
-2.  **Task Broker (Redis):** Manages the communication between the API and the background workers.
-3.  **Audit Worker (Python):** Uses `boto3` to perform asynchronous AWS infrastructure scans.
-4.  **Database (PostgreSQL):** Stores user credentials and historical audit reports.
+- a Node.js/Express auth gateway
+- Redis as the task queue
+- a Python worker that performs AWS scans
+- PostgreSQL for user and audit report storage
+- Nginx as the reverse proxy
 
----
+## What it does
 
-## 🛠 Tech Stack
-*   **Backend:** Node.js (Express), Python
-*   **Infrastructure:** AWS (Boto3), Docker, Nginx
-*   **Data/Caching:** PostgreSQL, Redis
-*   **Security:** JWT, Bcrypt, Web Security principles
+- Register and log in users with hashed passwords
+- Issue JWTs for authenticated requests
+- Queue `start_audit` tasks in Redis through `POST /api/audit`
+- Consume tasks in the Python worker
+- Scan AWS for:
+  - unencrypted S3 buckets
+  - running EC2 instances
+  - MFA status for the current IAM user
+- Store scan results in PostgreSQL
 
----
+## Project Layout
 
-## 🚀 Implementation Roadmap (For LLM Execution)
+- `server.js` - Express API gateway
+- `lib/auth.js` - JWT helpers and middleware
+- `worker.py` - Redis consumer and AWS audit worker
+- `docker-compose.yml` - local stack definition
+- `Dockerfile.gateway` - Node service image
+- `Dockerfile.worker` - Python service image
+- `nginx/nginx.conf` - reverse proxy config
+- `tests/` - unit tests for the gateway and worker
 
-### Step 1: The Dockerized Foundation
-*   **Task:** Setup a `docker-compose.yml` file.
-*   **Requirement:** Define five services: `gateway` (Node), `worker` (Python), `redis`, `db` (Postgres), and `nginx`.
-*   **Goal:** Ensure all containers can communicate via a shared bridge network.
+## Prerequisites
 
-### Step 2: The Auth Gateway (Node.js)
-*   **Task:** Develop a REST API for User Registration and Login.
-*   **Requirement:** Use Bcrypt for password hashing and generate JWTs for session management.
-*   **Endpoint:** `POST /api/audit` — This endpoint should verify the JWT, then push a "Scan Task" message into a Redis list instead of performing the scan itself.
+- Docker and Docker Compose
+- Optional for local tests: Node.js 18+ and Python 3.11+
 
-### Step 3: The Distributed Worker (Python)
-*   **Task:** Create a `worker.py` script that listens to the Redis list.
-*   **Requirement:** When a message is received, trigger a function using the `boto3` library.
-*   **Audit Logic:** 
-    1.  Check for any unencrypted S3 buckets.
-    2.  List all running EC2 instances and their "State."
-    3.  Check if MFA is enabled for the current IAM user.
+## Quick Start
 
-### Step 4: Data Persistence & Reporting
-*   **Task:** Save the JSON results of the AWS scan back into the PostgreSQL database.
-*   **Requirement:** Link each report to the `user_id` who requested it.
-*   **Goal:** Show high-level **Data Modeling** and **Log Analysis** skills as practiced in your Deloitte simulation.
+1. Copy the example env file:
 
-### Step 5: Nginx Reverse Proxy
-*   **Task:** Configure Nginx to route traffic to the Node.js gateway.
-*   **Requirement:** Hide the Express server behind the proxy and set up a basic rate-limiter to prevent API abuse.
+```bash
+cp .env.example .env
+```
 
----
+2. Start the full stack:
 
-## 📝 Prompt to give your LLM:
-> "I am building **Cloud-Sentinel**, a distributed AWS auditor. I need you to help me code the **Step 2: Auth Gateway**. Provide the `server.js` code using Express.js that connects to a PostgreSQL database and uses Redis to push a task called 'start_audit'. Ensure the code follows professional **Web Security** standards."
+```bash
+sudo docker compose up --build
+```
 
----
+3. Open the API through Nginx:
 
-### Why this project fits your Resume:
-Building this validates your technical skills in **Docker**, **AWS**, and **Node.js**. It also proves you can handle **Microservices** and **Log Analysis**, which are key differentiators from projects focused purely on frontend or basic Android development.
+```bash
+curl http://localhost/health
+```
+
+If you prefer a detached start:
+
+```bash
+sudo docker compose up --build -d
+```
+
+## Local Endpoints
+
+- `GET /health` - gateway health check
+- `POST /api/register` - create a user
+- `POST /api/login` - return a JWT
+- `POST /api/audit` - queue an audit task, requires `Authorization: Bearer <token>`
+
+## Example Flow
+
+1. Register a user:
+
+```bash
+curl -X POST http://localhost/api/register \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"demo@example.com","password":"demo-password"}'
+```
+
+2. Log in and capture the token:
+
+```bash
+curl -X POST http://localhost/api/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"demo@example.com","password":"demo-password"}'
+```
+
+3. Queue an audit:
+
+```bash
+curl -X POST http://localhost/api/audit \
+  -H 'Content-Type: application/json' \
+  -H 'Authorization: Bearer <paste-token-here>' \
+  -d '{"params":{"scope":"default"}}'
+```
+
+## Tests
+
+Run the Node.js tests:
+
+```bash
+npm test
+```
+
+Run the Python worker tests in a virtual environment:
+
+```bash
+python -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m unittest discover -s tests -p 'test_*.py'
+```
+
+## Notes
+
+- The worker needs valid AWS credentials before real scans will succeed.
+- The default database credentials in `.env.example` match the Docker Compose Postgres service.
+- `.env` is ignored by git, so keep secrets out of the repository.
