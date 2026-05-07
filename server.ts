@@ -323,11 +323,24 @@ app.post('/api/terminal/exec', authenticateJWT, async (req: Request, res: Respon
       let output = '';
       let errOutput = '';
 
-      const proc = spawn('bash', ['-c', command], {
+      const shell = process.env.SHELL || 'sh';
+      const proc = spawn(shell, ['-c', command], {
         env: {
           ...process.env,
           AWS_REGION: process.env.AWS_REGION || 'ap-south-1'
         }
+      });
+
+      proc.on('error', (procErr) => {
+        console.error('Process spawn error', procErr);
+        pool.query(
+          'INSERT INTO audit_logs (user_id, command, output, exit_code) VALUES ($1, $2, $3, $4)',
+          [(req as any).user.id, command, (procErr && procErr.message) || String(procErr), -1]
+        ).catch(e => console.error('Failed to log command error', e));
+        try {
+          if (!res.headersSent) res.status(500).json({ error: 'failed to spawn shell', details: procErr && procErr.message });
+        } catch (e) {}
+        resolve();
       });
 
       proc.stdout.on('data', (data) => {
