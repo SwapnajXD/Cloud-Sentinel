@@ -1,6 +1,12 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState, useTransition } from 'react';
+import dynamic from 'next/dynamic';
+
+const TerminalShell = dynamic(
+  () => import('./terminal-shell').then(mod => ({ default: mod.TerminalShell })),
+  { ssr: false }
+);
 
 type ReportRow = {
   id: number;
@@ -757,6 +763,12 @@ export function DashboardShell() {
           </div>
         )}
       </section>
+
+      {token && (
+        <section className="card">
+          <TerminalShell token={token} />
+        </section>
+      )}
     </main>
   );
 }

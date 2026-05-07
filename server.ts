@@ -7,6 +7,8 @@ import * as bcrypt from 'bcryptjs';
 import { Pool, QueryResult } from 'pg';
 import { createClient } from 'redis';
 import cors from 'cors';
+import AWS from 'aws-sdk';
+import { spawn } from 'child_process';
 
 import { signToken, authenticateJWT, TokenPayload } from './lib/auth';
 
@@ -44,6 +46,16 @@ async function initDb(): Promise<void> {
       id SERIAL PRIMARY KEY,
       user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
       report JSONB,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      command TEXT NOT NULL,
+      output TEXT,
+      exit_code INTEGER,
       created_at TIMESTAMP DEFAULT NOW()
     )
   `);
@@ -226,6 +238,130 @@ app.delete('/api/account', authenticateJWT, async (req: Request, res: Response):
   } catch (err) {
     console.error('Failed to delete account', err);
     res.status(500).json({ error: 'failed to delete account' });
+  }
+});
+
+// Terminal: List EC2 instances available for SSM session
+app.get('/api/terminal/instances', authenticateJWT, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const ec2 = new AWS.EC2({ region: process.env.AWS_REGION || 'ap-south-1' });
+    const data = await ec2.describeInstances({
+      Filters: [{ Name: 'instance-state-name', Values: ['running'] }]
+    }).promise();
+
+    const instances = data.Reservations?.flatMap(r => r.Instances?.map(i => ({
+      id: i.InstanceId,
+      name: i.Tags?.find(t => t.Key === 'Name')?.Value || i.InstanceId,
+      state: i.State?.Name,
+      type: i.InstanceType,
+      publicIp: i.PublicIpAddress,
+      launchTime: i.LaunchTime
+    })) || []) || [];
+
+    res.json({ instances });
+  } catch (err: any) {
+    console.error('Failed to list instances', err);
+    if (err && (err.code === 'RequestExpired' || err.code === 'RequestTimeTooSkewed')) {
+      res.status(440).json({ error: 'AWS request expired or system clock skew detected. Refresh AWS credentials and ensure container clock is correct.' });
+      return;
+    }
+    if (err && (err.code === 'CredentialsError' || err.code === 'UnknownEndpoint')) {
+      res.status(502).json({ error: 'AWS credentials missing or AWS unreachable from container.' });
+      return;
+    }
+    res.status(500).json({ error: 'failed to list instances' });
+  }
+});
+
+// Terminal: Start SSM session (will return session ID and WebSocket endpoint details)
+app.post('/api/terminal/session', authenticateJWT, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { instanceId } = req.body;
+    if (!instanceId) {
+      res.status(400).json({ error: 'instanceId required' });
+      return;
+    }
+
+    const ssm = new AWS.SSM({ region: process.env.AWS_REGION || 'ap-south-1' });
+    const data = await ssm.startSession({
+      Target: instanceId,
+      DocumentName: 'AWS-StartInteractiveCommand',
+      Parameters: { command: ['/bin/bash'] }
+    }).promise();
+
+    res.json({
+      sessionId: data.SessionId,
+      tokenValue: data.TokenValue,
+      streamUrl: data.StreamUrl,
+      instanceId
+    });
+  } catch (err) {
+    console.error('Failed to start session', err);
+    res.status(500).json({ error: 'failed to start session' });
+  }
+});
+
+// Terminal: Execute AWS CLI command (alternative to direct session)
+app.post('/api/terminal/exec', authenticateJWT, async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { command } = req.body;
+    if (!command) {
+      res.status(400).json({ error: 'command required' });
+      return;
+    }
+
+    // Whitelist safe commands
+    const allowedPrefixes = ['aws ec2 describe', 'aws ec2 list', 'aws s3api list', 'aws s3api head', 'aws iam get'];
+    const isAllowed = allowedPrefixes.some(prefix => command.toLowerCase().startsWith(prefix));
+    
+    if (!isAllowed) {
+      res.status(403).json({ error: 'command not allowed - only read operations permitted' });
+      return;
+    }
+
+    return new Promise<void>((resolve) => {
+      let output = '';
+      let errOutput = '';
+
+      const proc = spawn('bash', ['-c', command], {
+        env: {
+          ...process.env,
+          AWS_REGION: process.env.AWS_REGION || 'ap-south-1'
+        }
+      });
+
+      proc.stdout.on('data', (data) => {
+        output += data.toString();
+      });
+
+      proc.stderr.on('data', (data) => {
+        errOutput += data.toString();
+      });
+
+      proc.on('close', (code) => {
+        // Log command execution
+        pool.query(
+          'INSERT INTO audit_logs (user_id, command, output, exit_code) VALUES ($1, $2, $3, $4)',
+          [(req as any).user.id, command, output || errOutput, code]
+        ).catch(e => console.error('Failed to log command', e));
+
+        if (code === 0) {
+          res.json({ output, exitCode: code });
+        } else {
+          res.status(500).json({ error: errOutput || output, exitCode: code });
+        }
+        resolve();
+      });
+
+      setTimeout(() => {
+        proc.kill();
+        res.status(408).json({ error: 'command timeout' });
+        resolve();
+      }, 30000); // 30 second timeout
+    });
+  } catch (err) {
+    console.error('Failed to execute command', err);
+    res.status(500).json({ error: 'failed to execute command' });
   }
 });
 
