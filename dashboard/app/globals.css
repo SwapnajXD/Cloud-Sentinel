@@ -472,6 +472,156 @@ button {
   font-weight: 600;
 }
 
+.insight-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 1rem;
+  margin-top: 1rem;
+}
+
+.insight-card {
+  min-height: 100%;
+}
+
+.insight-card-timeline {
+  background: linear-gradient(180deg, #fff3c4 0%, #fffef7 100%);
+}
+
+.insight-card-evidence {
+  background: linear-gradient(180deg, #fffef7 0%, #fff3c4 100%);
+}
+
+.insight-card-simulation {
+  background: linear-gradient(180deg, #fff7d6 0%, #fffef7 100%);
+}
+
+.metric-chip,
+.score-pill,
+.trend-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 3px solid var(--line);
+  padding: 0.35rem 0.55rem;
+  background: #fffef7;
+  color: #111111;
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  box-shadow: var(--shadow-tight);
+}
+
+.score-pill.critical,
+.trend-pill.up {
+  background: #ffb3b3;
+}
+
+.score-pill.elevated {
+  background: #ffde59;
+}
+
+.score-pill.controlled,
+.trend-pill.down {
+  background: #b7f397;
+}
+
+.trend-pill.flat {
+  background: #fffef7;
+}
+
+.timeline-list,
+.finding-list,
+.simulation-grid {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.timeline-item,
+.finding-card,
+.simulation-card {
+  border: 3px solid var(--line);
+  background: #fffef7;
+  box-shadow: var(--shadow-tight);
+  padding: 0.9rem;
+}
+
+.timeline-head,
+.timeline-score,
+.finding-head,
+.simulation-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.timeline-item p,
+.finding-card p,
+.simulation-card p {
+  margin: 0.55rem 0 0;
+  line-height: 1.55;
+  color: var(--muted);
+}
+
+.timeline-item strong,
+.finding-head strong,
+.simulation-head strong {
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+}
+
+.finding-card span {
+  color: #111111;
+  font-weight: 700;
+}
+
+.finding-card.critical {
+  background: #ffb3b3;
+}
+
+.finding-card.high {
+  background: #ffde59;
+}
+
+.finding-card.medium {
+  background: #fff3c4;
+}
+
+.finding-card.good {
+  background: #b7f397;
+}
+
+.simulation-score {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  margin-top: 0.7rem;
+}
+
+.simulation-score span {
+  font-family: var(--font-display), 'Trebuchet MS', sans-serif;
+  font-size: 1.9rem;
+  line-height: 1;
+}
+
+.simulation-score small {
+  color: var(--muted);
+  text-transform: uppercase;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.simulation-outcome {
+  font-weight: 700;
+  color: #111111;
+}
+
+.subtle-empty {
+  background: linear-gradient(135deg, #fffef7, #fff3c4);
+}
+
 .primary,
 .secondary,
 .ghost,
@@ -534,6 +684,10 @@ button:disabled {
 @media (max-width: 980px) {
   .hero,
   .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .insight-grid {
     grid-template-columns: 1fr;
   }
 
