@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { Terminal } from 'xterm';
 import { WebLinksAddon } from 'xterm-addon-web-links';
-import 'xterm/css/xterm.css';
+import { fetchJson } from '@/lib/api';
 
 interface EC2Instance {
   id: string;
@@ -34,13 +34,13 @@ export function TerminalShell({ token }: TerminalShellProps) {
   useEffect(() => {
     const fetchInstances = async () => {
       try {
-        const res = await fetch('/api/terminal/instances', {
+        const data = await fetchJson<{ instances?: EC2Instance[] }>('/api/terminal/instances', {
           headers: { Authorization: `Bearer ${token}` }
         });
-        const data = await res.json();
-        setInstances(data.instances || []);
-        if (data.instances?.length > 0) {
-          setSelectedInstance(data.instances[0].id);
+        const fetchedInstances = data.instances || [];
+        setInstances(fetchedInstances);
+        if (fetchedInstances.length > 0) {
+          setSelectedInstance(fetchedInstances[0].id);
         }
       } catch (err) {
         console.error('Failed to fetch instances', err);
@@ -112,7 +112,8 @@ export function TerminalShell({ token }: TerminalShellProps) {
         body: JSON.stringify({ command })
       });
 
-      const data = await res.json();
+      const text = await res.text();
+      const data = text.trim() ? JSON.parse(text) : {};
       if (res.ok) {
         setOutput(data.output || 'Command executed successfully');
       } else {

@@ -322,14 +322,20 @@ app.post('/api/terminal/exec', authenticateJWT, async (req: Request, res: Respon
     return new Promise<void>((resolve) => {
       let output = '';
       let errOutput = '';
+      let responded = false;
 
-      const shell = process.env.SHELL || 'sh';
-      const proc = spawn(shell, ['-c', command], {
+      const proc = spawn('/bin/sh', ['-c', command], {
         env: {
           ...process.env,
           AWS_REGION: process.env.AWS_REGION || 'ap-south-1'
         }
       });
+
+      const finish = (status: number, payload: any) => {
+        if (responded) return;
+        responded = true;
+        try { res.status(status).json(payload); } catch (e) { console.error('Response send error', e); }
+      };
 
       proc.on('error', (procErr) => {
         console.error('Process spawn error', procErr);
@@ -337,9 +343,7 @@ app.post('/api/terminal/exec', authenticateJWT, async (req: Request, res: Respon
           'INSERT INTO audit_logs (user_id, command, output, exit_code) VALUES ($1, $2, $3, $4)',
           [(req as any).user.id, command, (procErr && procErr.message) || String(procErr), -1]
         ).catch(e => console.error('Failed to log command error', e));
-        try {
-          if (!res.headersSent) res.status(500).json({ error: 'failed to spawn shell', details: procErr && procErr.message });
-        } catch (e) {}
+        finish(500, { error: 'failed to spawn shell', details: procErr && procErr.message });
         resolve();
       });
 
@@ -351,7 +355,14 @@ app.post('/api/terminal/exec', authenticateJWT, async (req: Request, res: Respon
         errOutput += data.toString();
       });
 
+      const timeoutId = setTimeout(() => {
+        try { proc.kill(); } catch (e) {}
+        finish(408, { error: 'command timeout' });
+        resolve();
+      }, 30000);
+
       proc.on('close', (code) => {
+        clearTimeout(timeoutId);
         // Log command execution
         pool.query(
           'INSERT INTO audit_logs (user_id, command, output, exit_code) VALUES ($1, $2, $3, $4)',
@@ -359,18 +370,12 @@ app.post('/api/terminal/exec', authenticateJWT, async (req: Request, res: Respon
         ).catch(e => console.error('Failed to log command', e));
 
         if (code === 0) {
-          res.json({ output, exitCode: code });
+          finish(200, { output, exitCode: code });
         } else {
-          res.status(500).json({ error: errOutput || output, exitCode: code });
+          finish(500, { error: errOutput || output, exitCode: code });
         }
         resolve();
       });
-
-      setTimeout(() => {
-        proc.kill();
-        res.status(408).json({ error: 'command timeout' });
-        resolve();
-      }, 30000); // 30 second timeout
     });
   } catch (err) {
     console.error('Failed to execute command', err);

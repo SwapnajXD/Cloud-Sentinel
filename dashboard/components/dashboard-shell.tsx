@@ -2,6 +2,7 @@
 
 import { FormEvent, useEffect, useMemo, useState, useTransition } from 'react';
 import dynamic from 'next/dynamic';
+import { fetchJson } from '../lib/api';
 
 const TerminalShell = dynamic(
   () => import('./terminal-shell').then(mod => ({ default: mod.TerminalShell })),
@@ -370,7 +371,8 @@ export function DashboardShell() {
             Authorization: `Bearer ${authToken}`,
           },
         });
-        const payload = (await response.json()) as ReportsResponse | ActionResponse;
+        const text = await response.text();
+        const payload = (text.trim() ? JSON.parse(text) : {}) as ReportsResponse | ActionResponse;
         if (!response.ok) {
           if (response.status === 401) {
             clearExpiredSession('Session expired. Please sign in again.');
@@ -406,7 +408,12 @@ export function DashboardShell() {
       throw new Error('Session expired. Please sign in again.');
     }
 
-    return (await response.json()) as AuthResponse | ActionResponse | ReportsResponse;
+    const text = await response.text();
+    if (!text.trim()) {
+      throw new Error('Empty response from server');
+    }
+
+    return JSON.parse(text) as AuthResponse | ActionResponse | ReportsResponse;
   }
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
