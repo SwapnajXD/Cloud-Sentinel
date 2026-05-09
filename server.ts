@@ -327,11 +327,23 @@ app.post('/api/terminal/exec', authenticateJWT, async (req: Request, res: Respon
       let errOutput = '';
       let responded = false;
 
-      const proc = spawn('/bin/sh', ['-c', command], {
-        env: {
-          ...process.env,
-          AWS_REGION: process.env.AWS_REGION || 'ap-south-1'
-        }
+      const isAwsCommand = command.toLowerCase().startsWith('aws ');
+      const shellCommand = isAwsCommand
+        ? `eval "$(aws configure export-credentials --format env)" && ${command}`
+        : command;
+
+      const childEnv = { ...process.env, AWS_REGION: process.env.AWS_REGION || 'ap-south-1' } as NodeJS.ProcessEnv & Record<string, string | undefined>;
+      if (isAwsCommand) {
+        delete childEnv.AWS_ACCESS_KEY_ID;
+        delete childEnv.AWS_SECRET_ACCESS_KEY;
+        delete childEnv.AWS_SESSION_TOKEN;
+        delete childEnv.AWS_CREDENTIAL_EXPIRATION;
+        delete childEnv.AWS_PROFILE;
+        delete childEnv.AWS_DEFAULT_PROFILE;
+      }
+
+      const proc = spawn('/bin/sh', ['-c', shellCommand], {
+        env: childEnv
       });
 
       const finish = (status: number, payload: any) => {
