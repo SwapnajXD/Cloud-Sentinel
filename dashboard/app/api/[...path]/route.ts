@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 
-const BACKEND_URL = process.env.BACKEND_URL || 'http://gateway:3000';
+const BACKEND_URL =
+  process.env.BACKEND_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:3000' : 'http://gateway:3000');
 
 async function proxyRequest(request: Request, path: string[]) {
   const url = new URL(request.url);

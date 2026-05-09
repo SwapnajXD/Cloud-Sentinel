@@ -85,6 +85,8 @@ services:
     depends_on:
       gateway:
         condition: service_started
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "80:80"
     volumes:

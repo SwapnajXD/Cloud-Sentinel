@@ -7,7 +7,8 @@ import * as bcrypt from 'bcryptjs';
 import { Pool, QueryResult } from 'pg';
 import { createClient } from 'redis';
 import cors from 'cors';
-import AWS from 'aws-sdk';
+import { EC2Client, DescribeInstancesCommand } from '@aws-sdk/client-ec2';
+import { SSMClient, StartSessionCommand } from '@aws-sdk/client-ssm';
 import { spawn } from 'child_process';
 
 import { signToken, authenticateJWT, TokenPayload } from './lib/auth';
@@ -121,6 +122,10 @@ async function findUserByEmail(email: string): Promise<UserFromDb | undefined> {
 }
 
 // Routes
+const awsRegion = process.env.AWS_REGION || 'ap-south-1';
+const ec2Client = new EC2Client({ region: awsRegion });
+const ssmClient = new SSMClient({ region: awsRegion });
+
 app.post('/api/register', async (req: Request, res: Response): Promise<void> => {
   try {
     const { email, password } = req.body;
@@ -244,10 +249,9 @@ app.delete('/api/account', authenticateJWT, async (req: Request, res: Response):
 // Terminal: List EC2 instances available for SSM session
 app.get('/api/terminal/instances', authenticateJWT, async (req: Request, res: Response): Promise<void> => {
   try {
-    const ec2 = new AWS.EC2({ region: process.env.AWS_REGION || 'ap-south-1' });
-    const data = await ec2.describeInstances({
+    const data = await ec2Client.send(new DescribeInstancesCommand({
       Filters: [{ Name: 'instance-state-name', Values: ['running'] }]
-    }).promise();
+    }));
 
     const instances = data.Reservations?.flatMap(r => r.Instances?.map(i => ({
       id: i.InstanceId,
@@ -282,12 +286,11 @@ app.post('/api/terminal/session', authenticateJWT, async (req: Request, res: Res
       return;
     }
 
-    const ssm = new AWS.SSM({ region: process.env.AWS_REGION || 'ap-south-1' });
-    const data = await ssm.startSession({
+    const data = await ssmClient.send(new StartSessionCommand({
       Target: instanceId,
       DocumentName: 'AWS-StartInteractiveCommand',
       Parameters: { command: ['/bin/bash'] }
-    }).promise();
+    }));
 
     res.json({
       sessionId: data.SessionId,
