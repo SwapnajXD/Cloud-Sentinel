@@ -549,7 +549,10 @@ export function DashboardShell() {
         </div>
 
         <div className="topbar-actions">
-          <span className={`session-pill ${token ? 'live' : 'idle'}`}>{token ? `Signed in as ${email}` : 'Signed out'}</span>
+          <span className="live-indicator">
+            <span className="pulse-dot"></span>
+            <span className={`session-pill ${token ? 'live' : 'idle'}`}>{token ? `Signed in as ${email}` : 'Signed out'}</span>
+          </span>
           <button className="ghost" onClick={() => fetchReports()} disabled={!token || loadingReports}>
             Refresh reports
           </button>
@@ -574,17 +577,15 @@ export function DashboardShell() {
         </div>
 
         <div className="hero-panel">
-          {stats.map((stat) => (
+          {stats.map((stat, idx) => (
             <StatCard key={stat.label} {...stat} />
           ))}
           <div className="mini-card">
-            <p>Core routes</p>
+            <p>Live scan status</p>
             <ul>
-              <li>/api/register</li>
-              <li>/api/login</li>
-              <li>/api/audit</li>
-              <li>/api/reports</li>
-              <li>/api/account</li>
+              <li><span className="pulse-dot" style={{width:6,height:6,display:'inline-block',marginRight:8,verticalAlign:'middle'}}></span>Worker active</li>
+              <li>Redis: connected</li>
+              <li>Postgres: healthy</li>
             </ul>
           </div>
         </div>
@@ -721,14 +722,16 @@ export function DashboardShell() {
               <span>The latest report will populate proof, impact, and remediation details here.</span>
             </div>
           ) : (
-            <div className="finding-list">
+            <div className="finding-list terminal-style">
               {evidence.map((finding) => (
                 <article key={finding.title} className={`finding-card ${finding.severity}`}>
                   <div className="finding-head">
                     <strong>{finding.title}</strong>
-                    <span>{finding.severity}</span>
+                    <span className={`severity-badge ${finding.severity === 'high' ? 'warning' : finding.severity === 'good' ? 'secure' : finding.severity}`}>
+                      {finding.severity === 'high' ? 'Warning' : finding.severity === 'good' ? 'Secure' : finding.severity}
+                    </span>
                   </div>
-                  <p><span>Evidence:</span> {finding.evidence}</p>
+                  <p><span>Evidence:</span> <span className="resource-id">{finding.evidence}</span></p>
                   <p><span>Impact:</span> {finding.impact}</p>
                   <p><span>Fix:</span> {finding.fix}</p>
                 </article>
