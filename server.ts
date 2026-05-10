@@ -7,9 +7,6 @@ import * as bcrypt from 'bcryptjs';
 import { Pool, QueryResult } from 'pg';
 import { createClient } from 'redis';
 import cors from 'cors';
-import { EC2Client, DescribeInstancesCommand } from '@aws-sdk/client-ec2';
-import { SSMClient, StartSessionCommand } from '@aws-sdk/client-ssm';
-import { spawn } from 'child_process';
 
 import { signToken, authenticateJWT, TokenPayload } from './lib/auth';
 
@@ -50,6 +47,11 @@ async function initDb(): Promise<void> {
       created_at TIMESTAMP DEFAULT NOW()
     )
   `);
+  // Create index for faster report queries by user
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_audit_reports_user_created
+    ON audit_reports (user_id, created_at DESC)
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS audit_logs (
       id SERIAL PRIMARY KEY,
@@ -59,6 +61,11 @@ async function initDb(): Promise<void> {
       exit_code INTEGER,
       created_at TIMESTAMP DEFAULT NOW()
     )
+  `);
+  // Create index for faster audit log queries
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_user_created
+    ON audit_logs (user_id, created_at DESC)
   `);
 }
 
@@ -122,9 +129,6 @@ async function findUserByEmail(email: string): Promise<UserFromDb | undefined> {
 }
 
 // Routes
-const awsRegion = process.env.AWS_REGION || 'ap-south-1';
-const ec2Client = new EC2Client({ region: awsRegion });
-const ssmClient = new SSMClient({ region: awsRegion });
 
 app.post('/api/register', async (req: Request, res: Response): Promise<void> => {
   try {
@@ -246,155 +250,49 @@ app.delete('/api/account', authenticateJWT, async (req: Request, res: Response):
   }
 });
 
-// Terminal: List EC2 instances available for SSM session
-app.get('/api/terminal/instances', authenticateJWT, async (req: Request, res: Response): Promise<void> => {
+// AI Summary: Generate Gemini-powered audit summary
+app.post('/api/ai/summary', authenticateJWT, async (req: Request, res: Response): Promise<void> => {
   try {
-    const data = await ec2Client.send(new DescribeInstancesCommand({
-      Filters: [{ Name: 'instance-state-name', Values: ['running'] }]
-    }));
-
-    const instances = data.Reservations?.flatMap(r => r.Instances?.map(i => ({
-      id: i.InstanceId,
-      name: i.Tags?.find(t => t.Key === 'Name')?.Value || i.InstanceId,
-      state: i.State?.Name,
-      type: i.InstanceType,
-      publicIp: i.PublicIpAddress,
-      launchTime: i.LaunchTime
-    })) || []) || [];
-
-    res.json({ instances });
-  } catch (err: any) {
-    console.error('Failed to list instances', err);
-    if (err && (err.code === 'RequestExpired' || err.code === 'RequestTimeTooSkewed')) {
-      res.status(440).json({ error: 'AWS request expired or system clock skew detected. Refresh AWS credentials and ensure container clock is correct.' });
-      return;
-    }
-    if (err && (err.code === 'CredentialsError' || err.code === 'UnknownEndpoint')) {
-      res.status(502).json({ error: 'AWS credentials missing or AWS unreachable from container.' });
-      return;
-    }
-    res.status(500).json({ error: 'failed to list instances' });
-  }
-});
-
-// Terminal: Start SSM session (will return session ID and WebSocket endpoint details)
-app.post('/api/terminal/session', authenticateJWT, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { instanceId } = req.body;
-    if (!instanceId) {
-      res.status(400).json({ error: 'instanceId required' });
+    const { report } = req.body;
+    if (!report) {
+      res.status(400).json({ error: 'report required' });
       return;
     }
 
-    const data = await ssmClient.send(new StartSessionCommand({
-      Target: instanceId,
-      DocumentName: 'AWS-StartInteractiveCommand',
-      Parameters: { command: ['/bin/bash'] }
-    }));
-
-    res.json({
-      sessionId: data.SessionId,
-      tokenValue: data.TokenValue,
-      streamUrl: data.StreamUrl,
-      instanceId
-    });
-  } catch (err) {
-    console.error('Failed to start session', err);
-    res.status(500).json({ error: 'failed to start session' });
-  }
-});
-
-// Terminal: Execute AWS CLI command (alternative to direct session)
-app.post('/api/terminal/exec', authenticateJWT, async (req: Request, res: Response): Promise<void> => {
-  try {
-    const { command } = req.body;
-    if (!command) {
-      res.status(400).json({ error: 'command required' });
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      res.status(503).json({ error: 'GEMINI_API_KEY not configured' });
       return;
     }
 
-    // Whitelist safe commands
-    const allowedPrefixes = ['aws ec2 describe', 'aws ec2 list', 'aws s3api list', 'aws s3api head', 'aws iam get'];
-    const isAllowed = allowedPrefixes.some(prefix => command.toLowerCase().startsWith(prefix));
-    
-    if (!isAllowed) {
-      res.status(403).json({ error: 'command not allowed - only read operations permitted' });
-      return;
-    }
+    const prompt = `You are a cloud security expert. Analyze this AWS audit report and provide a clear, actionable summary for a security team. Include: 1) Key findings, 2) Risk level (Critical/High/Medium/Low), 3) Recommended next steps. Keep it concise and in plain English.
 
-    return new Promise<void>((resolve) => {
-      let output = '';
-      let errOutput = '';
-      let responded = false;
+Audit Report:
+${JSON.stringify(report, null, 2)}`;
 
-      const isAwsCommand = command.toLowerCase().startsWith('aws ');
-      const shellCommand = isAwsCommand
-        ? `eval "$(aws configure export-credentials --format env)" && ${command}`
-        : command;
-
-      const childEnv = { ...process.env, AWS_REGION: process.env.AWS_REGION || 'ap-south-1' } as NodeJS.ProcessEnv & Record<string, string | undefined>;
-      if (isAwsCommand) {
-        delete childEnv.AWS_ACCESS_KEY_ID;
-        delete childEnv.AWS_SECRET_ACCESS_KEY;
-        delete childEnv.AWS_SESSION_TOKEN;
-        delete childEnv.AWS_CREDENTIAL_EXPIRATION;
-        delete childEnv.AWS_PROFILE;
-        delete childEnv.AWS_DEFAULT_PROFILE;
-      }
-
-      const proc = spawn('/bin/sh', ['-c', shellCommand], {
-        env: childEnv
-      });
-
-      const finish = (status: number, payload: any) => {
-        if (responded) return;
-        responded = true;
-        try { res.status(status).json(payload); } catch (e) { console.error('Response send error', e); }
-      };
-
-      proc.on('error', (procErr) => {
-        console.error('Process spawn error', procErr);
-        pool.query(
-          'INSERT INTO audit_logs (user_id, command, output, exit_code) VALUES ($1, $2, $3, $4)',
-          [(req as any).user.id, command, (procErr && procErr.message) || String(procErr), -1]
-        ).catch(e => console.error('Failed to log command error', e));
-        finish(500, { error: 'failed to spawn shell', details: procErr && procErr.message });
-        resolve();
-      });
-
-      proc.stdout.on('data', (data) => {
-        output += data.toString();
-      });
-
-      proc.stderr.on('data', (data) => {
-        errOutput += data.toString();
-      });
-
-      const timeoutId = setTimeout(() => {
-        try { proc.kill(); } catch (e) {}
-        finish(408, { error: 'command timeout' });
-        resolve();
-      }, 30000);
-
-      proc.on('close', (code) => {
-        clearTimeout(timeoutId);
-        // Log command execution
-        pool.query(
-          'INSERT INTO audit_logs (user_id, command, output, exit_code) VALUES ($1, $2, $3, $4)',
-          [(req as any).user.id, command, output || errOutput, code]
-        ).catch(e => console.error('Failed to log command', e));
-
-        if (code === 0) {
-          finish(200, { output, exitCode: code });
-        } else {
-          finish(500, { error: errOutput || output, exitCode: code });
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=${apiKey}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 1024
         }
-        resolve();
-      });
+      })
     });
+
+    if (!response.ok) {
+      throw new Error(`Gemini API error: ${response.status}`);
+    }
+
+    const data = await response.json() as any;
+    const summary = data.candidates?.[0]?.content?.parts?.[0]?.text || 'Unable to generate summary';
+
+    res.json({ summary });
   } catch (err) {
-    console.error('Failed to execute command', err);
-    res.status(500).json({ error: 'failed to execute command' });
+    console.error('Failed to generate summary', err);
+    res.status(500).json({ error: 'failed to generate summary' });
   }
 });
 

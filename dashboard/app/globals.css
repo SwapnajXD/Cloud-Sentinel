@@ -750,3 +750,39 @@ button:disabled {
     justify-content: center;
   }
 }
+
+.ai-summary {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+  padding: 1.5rem;
+  border-radius: 8px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.ai-summary h1,
+.ai-summary h2,
+.ai-summary h3 {
+  color: #fff;
+  margin-top: 1rem;
+}
+
+.ai-summary h1:first-child,
+.ai-summary h2:first-child,
+.ai-summary h3:first-child {
+  margin-top: 0;
+}
+
+.ai-summary strong {
+  color: #ffd700;
+}
+
+.ai-summary ul,
+.ai-summary ol {
+  margin: 0.5rem 0;
+  padding-left: 1.5rem;
+}
+
+.ai-summary li {
+  margin: 0.25rem 0;
+}

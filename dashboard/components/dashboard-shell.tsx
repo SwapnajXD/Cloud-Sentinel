@@ -1,13 +1,6 @@
 'use client';
 
 import { FormEvent, useEffect, useMemo, useState, useTransition } from 'react';
-import dynamic from 'next/dynamic';
-import { fetchJson } from '../lib/api';
-
-const TerminalShell = dynamic(
-  () => import('./terminal-shell').then(mod => ({ default: mod.TerminalShell })),
-  { ssr: false }
-);
 
 type ReportRow = {
   id: number;
@@ -301,6 +294,8 @@ export function DashboardShell() {
   const [error, setError] = useState('');
   const [loadingReports, startReportsTransition] = useTransition();
   const [loadingAction, startActionTransition] = useTransition();
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
 
   const latestReport = reports[0] || null;
   const latestSummary = useMemo(() => (latestReport ? summarizeReport(latestReport) : null), [latestReport]);
@@ -394,14 +389,22 @@ export function DashboardShell() {
       throw new Error('You need to sign in first.');
     }
 
-    const response = await fetch(endpoint, {
-      method,
-      headers: {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
-      body: JSON.stringify(body),
-    });
+    let response: Response;
+    try {
+      response = await fetch(endpoint, {
+        method,
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify(body),
+      });
+    } catch (err) {
+      if (err instanceof TypeError && err.message.includes('fetch')) {
+        throw new Error('Network error: Unable to reach server');
+      }
+      throw err;
+    }
 
     if (response.status === 401) {
       clearExpiredSession('Session expired. Please sign in again.');
@@ -504,7 +507,36 @@ export function DashboardShell() {
     setLoginForm(emptyCredentials);
     setRegisterForm(emptyCredentials);
     setDeletePassword('');
+    setAiSummary(null);
     setStatus('Signed out.');
+  }
+
+  async function generateAiSummary() {
+    if (!latestReport || !token) return;
+
+    setAiSummaryLoading(true);
+    try {
+      const response = await fetch('/api/ai/summary', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ report: latestReport.report }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to generate summary');
+      }
+
+      const data = await response.json();
+      setAiSummary(data.summary);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to generate AI summary');
+    } finally {
+      setAiSummaryLoading(false);
+    }
   }
 
   return (
@@ -771,9 +803,32 @@ export function DashboardShell() {
         )}
       </section>
 
-      {token && (
+      {token && latestReport && (
         <section className="card">
-          <TerminalShell token={token} />
+          <div className="section-header">
+            <div>
+              <span className="eyebrow">AI Analysis</span>
+              <h2>Gemini-Powered Summary</h2>
+            </div>
+            <button
+              className="ghost"
+              onClick={generateAiSummary}
+              disabled={loadingAction || aiSummaryLoading}
+            >
+              {aiSummaryLoading ? 'Generating...' : 'Regenerate'}
+            </button>
+          </div>
+          {aiSummary ? (
+            <div className="ai-summary">{aiSummary}</div>
+          ) : (
+            <button
+              className="secondary"
+              onClick={generateAiSummary}
+              disabled={loadingAction || aiSummaryLoading}
+            >
+              {aiSummaryLoading ? 'Generating summary...' : 'Generate AI Summary'}
+            </button>
+          )}
         </section>
       )}
     </main>

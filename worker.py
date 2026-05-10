@@ -63,6 +63,13 @@ def ensure_schema(conn):
             )
             """
         )
+        # Create index for faster queries by user_id and created_at
+        cursor.execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_audit_reports_user_created
+            ON audit_reports (user_id, created_at DESC)
+            """
+        )
     conn.commit()
 
 
