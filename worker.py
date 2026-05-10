@@ -140,16 +140,40 @@ def check_mfa_for_current_user(iam_client, sts_client):
 
 
 def build_audit_report(task, aws_clients):
+    findings = []
+
+    s3_buckets = list_unencrypted_s3_buckets(aws_clients["s3"])
+    for bucket in s3_buckets:
+        findings.append({
+            "severity": "critical" if not bucket.get("encrypted") else "good",
+            "type": "S3Encryption",
+            "resource": bucket.get("bucket"),
+            "details": bucket.get("details"),
+        })
+
+    ec2_instances = list_running_ec2_instances(aws_clients["ec2"])
+    for instance in ec2_instances:
+        findings.append({
+            "severity": "medium",
+            "type": "EC2Instance",
+            "resource": instance.get("instance_id"),
+            "details": f"Type: {instance.get('type')}, State: {instance.get('state')}",
+        })
+
+    mfa_status = check_mfa_for_current_user(aws_clients["iam"], aws_clients["sts"])
+    findings.append({
+        "severity": "critical" if not mfa_status.get("enabled") else "good",
+        "type": "IAMMFA",
+        "resource": mfa_status.get("user_name", "N/A"),
+        "details": f"MFA Status: {mfa_status.get('status')}",
+    })
+
     return {
         "task_id": task.get("task_id"),
         "action": task.get("action"),
         "user_id": task["user_id"],
         "requested_at": task.get("requested_at") or datetime.now(timezone.utc).isoformat(),
-        "scan": {
-            "unencrypted_s3_buckets": list_unencrypted_s3_buckets(aws_clients["s3"]),
-            "running_ec2_instances": list_running_ec2_instances(aws_clients["ec2"]),
-            "mfa": check_mfa_for_current_user(aws_clients["iam"], aws_clients["sts"]),
-        },
+        "findings": findings,
     }
 
 
