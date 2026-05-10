@@ -35,6 +35,7 @@ type InsightFinding = {
   evidence: string;
   impact: string;
   fix: string;
+  resourceArn?: string;
 };
 
 type TimelineEntry = {
@@ -43,14 +44,6 @@ type TimelineEntry = {
   riskScore: number;
   delta: number | null;
   summary: string;
-};
-
-type SimulationScenario = {
-  title: string;
-  delta: number;
-  projectedScore: number;
-  evidence: string;
-  outcome: string;
 };
 
 type ScanSummary = {
@@ -72,7 +65,6 @@ function asRecord(value: unknown): Record<string, unknown> {
   if (value && typeof value === 'object' && !Array.isArray(value)) {
     return value as Record<string, unknown>;
   }
-
   return {};
 }
 
@@ -80,7 +72,6 @@ function asArray(value: unknown): Record<string, unknown>[] {
   if (!Array.isArray(value)) {
     return [];
   }
-
   return value.filter((item) => item && typeof item === 'object' && !Array.isArray(item)) as Record<string, unknown>[];
 }
 
@@ -88,11 +79,9 @@ function asString(value: unknown, fallback = ''): string {
   if (typeof value === 'string' && value.trim()) {
     return value;
   }
-
   if (typeof value === 'number' || typeof value === 'boolean') {
     return String(value);
   }
-
   return fallback;
 }
 
@@ -101,21 +90,14 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 function riskLabel(score: number): ScanSummary['riskLabel'] {
-  if (score >= 75) {
-    return 'Critical';
-  }
-
-  if (score >= 45) {
-    return 'Elevated';
-  }
-
+  if (score >= 75) return 'Critical';
+  if (score >= 45) return 'Elevated';
   return 'Controlled';
 }
 
 function formatScope(report: Record<string, unknown>): string {
   const task = asRecord(report.task);
   const requestedScope = asString(task.params && asRecord(task.params).scope, '');
-
   return requestedScope || asString(report.action, 'default');
 }
 
@@ -145,49 +127,49 @@ function summarizeReport(reportRow: ReportRow): ScanSummary {
 }
 
 function buildEvidence(summary: ScanSummary | null): InsightFinding[] {
-  if (!summary) {
-    return [];
-  }
+  if (!summary) return [];
 
   const findings: InsightFinding[] = [];
 
   if (summary.unencryptedBuckets.length > 0) {
     findings.push({
-      title: 'S3 encryption gap',
+      title: 'S3 Encryption Gap',
       severity: 'critical',
       evidence: `${summary.unencryptedBuckets.length} bucket(s): ${summary.unencryptedBuckets.join(', ')}`,
-      impact: 'Objects can be stored without server-side encryption and are easier to expose if access drifts.',
-      fix: 'Turn on default encryption, block public ACLs, and re-run the scan after the change.',
+      impact: 'Objects can be stored without server-side encryption.',
+      fix: 'Enable default encryption, block public ACLs.',
+      resourceArn: `arn:aws:s3:::${summary.unencryptedBuckets[0]}/*`,
     });
   }
 
   if (!summary.mfaEnabled) {
     findings.push({
-      title: 'MFA is missing',
+      title: 'MFA Not Enabled',
       severity: 'high',
-      evidence: 'Current identity reports MFA disabled or unavailable.',
-      impact: 'An exposed password or weak session control has a much higher chance of becoming account takeover.',
-      fix: 'Require MFA for the active IAM user or role before the next audit.',
+      evidence: 'Current identity reports MFA disabled.',
+      impact: 'Higher risk of credential abuse leading to account takeover.',
+      fix: 'Enable MFA for the active IAM user/role.',
     });
   }
 
   if (summary.runningInstances.length > 0) {
     findings.push({
-      title: 'Active EC2 surface',
+      title: 'Active EC2 Surface',
       severity: 'medium',
-      evidence: `${summary.runningInstances.length} running instance(s): ${summary.runningInstances.join(', ')}`,
-      impact: 'Every live instance adds reachability, configuration drift, and cost exposure.',
-      fix: 'Shut down idle compute and tag long-lived instances with an owner and expiry date.',
+      evidence: `${summary.runningInstances.length} running instance(s)`,
+      impact: 'Expands attack surface and adds cost exposure.',
+      fix: 'Terminate idle instances, tag long-lived ones.',
+      resourceArn: `arn:aws:ec2:*:${summary.runningInstances[0]}`,
     });
   }
 
   if (findings.length === 0) {
     findings.push({
-      title: 'No obvious control gaps',
+      title: 'No Critical Gaps',
       severity: 'good',
-      evidence: 'The latest scan did not surface an encryption, MFA, or running-instance issue.',
-      impact: 'The account posture is comparatively calm for the current checks.',
-      fix: 'Keep the same cadence and add another audit after any IAM or storage change.',
+      evidence: 'All security checks passed.',
+      impact: 'Account posture is healthy for current checks.',
+      fix: 'Maintain current security cadence.',
     });
   }
 
@@ -196,7 +178,6 @@ function buildEvidence(summary: ScanSummary | null): InsightFinding[] {
 
 function buildTimeline(reports: ReportRow[]): TimelineEntry[] {
   const ordered = reports.slice(0, 5).reverse();
-
   return ordered.map((report, index) => {
     const summary = summarizeReport(report);
     const previousScore = index > 0 ? summarizeReport(ordered[index - 1]).riskScore : null;
@@ -207,82 +188,22 @@ function buildTimeline(reports: ReportRow[]): TimelineEntry[] {
       createdAt: report.created_at,
       riskScore: summary.riskScore,
       delta,
-      summary:
-        summary.unencryptedBuckets.length > 0
-          ? `${summary.unencryptedBuckets.length} bucket(s) need encryption`
-          : summary.mfaEnabled
-            ? 'MFA is protecting the active identity'
-            : 'MFA is still the main gap',
+      summary: summary.unencryptedBuckets.length > 0
+        ? `${summary.unencryptedBuckets.length} bucket(s) need encryption`
+        : summary.mfaEnabled ? 'MFA protecting identity' : 'MFA is the main gap',
     };
   });
 }
 
-function buildSimulations(summary: ScanSummary | null): SimulationScenario[] {
-  if (!summary) {
-    return [];
-  }
-
-  const publicBucketDelta = summary.unencryptedBuckets.length > 0 ? 16 + summary.unencryptedBuckets.length * 4 : 20;
-  const mfaDelta = summary.mfaEnabled ? 22 : 6;
-  const computeDelta = summary.runningInstances.length > 0 ? 8 + summary.runningInstances.length * 2 : 12;
-
-  return [
-    {
-      title: 'Public bucket exposure',
-      delta: publicBucketDelta,
-      projectedScore: clamp(summary.riskScore + publicBucketDelta, 0, 100),
-      evidence: summary.unencryptedBuckets.length > 0
-        ? `Expanding the current ${summary.unencryptedBuckets.length} bucket(s) would raise data exposure fast.`
-        : 'A new public bucket would create the first real storage exposure in the account.',
-      outcome: 'Data exposure becomes the dominant risk path.',
-    },
-    {
-      title: 'MFA removed from the identity',
-      delta: mfaDelta,
-      projectedScore: clamp(summary.riskScore + mfaDelta, 0, 100),
-      evidence: summary.mfaEnabled
-        ? 'Disabling MFA would remove a strong gate on the current account flow.'
-        : 'The account already lacks MFA, so this scenario is effectively already active.',
-      outcome: 'Credential abuse becomes easier to turn into account takeover.',
-    },
-    {
-      title: 'Compute drift grows',
-      delta: computeDelta,
-      projectedScore: clamp(summary.riskScore + computeDelta, 0, 100),
-      evidence: summary.runningInstances.length > 0
-        ? `More than ${summary.runningInstances.length} running instance(s) expands the surface and the blast radius.`
-        : 'Launching one unmanaged instance would add the first compute exposure.',
-      outcome: 'Reachability and cost drift become visible immediately.',
-    },
-  ];
-}
-
 function formatDate(value: string): string {
-  return new Intl.DateTimeFormat('en', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
-  }).format(new Date(value));
+  return new Intl.DateTimeFormat('en', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value));
 }
 
-function previewReport(report: Record<string, unknown>): string {
-  try {
-    return JSON.stringify(report, null, 2);
-  } catch {
-    return '[unreadable report]';
-  }
+function formatTime(value: string): string {
+  return new Intl.DateTimeFormat('en', { timeStyle: 'medium' }).format(new Date(value));
 }
 
-function StatCard({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <article className="stat-card">
-      <p>{label}</p>
-      <h3>{value}</h3>
-      <span>{detail}</span>
-    </article>
-  );
-}
-
-export function DashboardShell() {
+export function DashboardShell(): JSX.Element {
   const [token, setToken] = useState<string | null>(null);
   const [email, setEmail] = useState('');
   const [reports, setReports] = useState<ReportRow[]>([]);
@@ -290,18 +211,15 @@ export function DashboardShell() {
   const [registerForm, setRegisterForm] = useState<Credentials>(emptyCredentials);
   const [deletePassword, setDeletePassword] = useState('');
   const [auditScope, setAuditScope] = useState('default');
-  const [status, setStatus] = useState('Ready to authenticate and launch an audit.');
+  const [status, setStatus] = useState('Ready to authenticate');
   const [error, setError] = useState('');
   const [loadingReports, startReportsTransition] = useTransition();
   const [loadingAction, startActionTransition] = useTransition();
-  const [aiSummary, setAiSummary] = useState<string | null>(null);
-  const [aiSummaryLoading, setAiSummaryLoading] = useState(false);
 
   const latestReport = reports[0] || null;
   const latestSummary = useMemo(() => (latestReport ? summarizeReport(latestReport) : null), [latestReport]);
   const timeline = useMemo(() => buildTimeline(reports), [reports]);
   const evidence = useMemo(() => buildEvidence(latestSummary), [latestSummary]);
-  const simulations = useMemo(() => buildSimulations(latestSummary), [latestSummary]);
 
   function clearExpiredSession(message: string) {
     window.localStorage.removeItem('token');
@@ -309,7 +227,6 @@ export function DashboardShell() {
     setToken(null);
     setEmail('');
     setReports([]);
-    setDeletePassword('');
     setStatus(message);
   }
 
@@ -323,34 +240,6 @@ export function DashboardShell() {
     }
   }, []);
 
-  const stats = useMemo(() => {
-    const latest = reports[0];
-    return [
-      {
-        label: 'Audit reports',
-        value: String(reports.length).padStart(2, '0'),
-        detail: latest ? `Latest on ${formatDate(latest.created_at)}` : 'No reports yet',
-      },
-      {
-        label: 'Risk posture',
-        value: latestSummary ? `${latestSummary.riskScore}/100` : 'N/A',
-        detail: latestSummary
-          ? `${latestSummary.riskLabel} with ${latestSummary.findingsCount} finding(s)`
-          : 'Run a scan to calculate account risk',
-      },
-      {
-        label: 'Session',
-        value: token ? 'Active' : 'Locked',
-        detail: token ? `Signed in as ${email}` : 'Authenticate to unlock actions',
-      },
-      {
-        label: 'Queue',
-        value: 'Redis',
-        detail: 'New audits are pushed to the worker queue',
-      },
-    ];
-  }, [email, latestSummary, reports, token]);
-
   async function fetchReports(activeToken?: string) {
     const authToken = activeToken || token;
     if (!authToken) {
@@ -362,31 +251,28 @@ export function DashboardShell() {
     startReportsTransition(async () => {
       try {
         const response = await fetch('/api/reports', {
-          headers: {
-            Authorization: `Bearer ${authToken}`,
-          },
+          headers: { Authorization: `Bearer ${authToken}` },
         });
         const text = await response.text();
         const payload = (text.trim() ? JSON.parse(text) : {}) as ReportsResponse | ActionResponse;
         if (!response.ok) {
           if (response.status === 401) {
-            clearExpiredSession('Session expired. Please sign in again.');
+            clearExpiredSession('Session expired');
             return;
           }
-          const errorMessage = 'error' in payload ? payload.error : undefined;
-          throw new Error(errorMessage || 'Failed to fetch reports');
+          throw new Error('error' in payload ? payload.error : 'Failed to fetch');
         }
         setReports((payload as ReportsResponse).reports);
-        setStatus(`Loaded ${(payload as ReportsResponse).count} report(s).`);
+        setStatus(`Loaded ${(payload as ReportsResponse).count} report(s)`);
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to fetch reports');
+        setError(err instanceof Error ? err.message : 'Failed to fetch');
       }
     });
   }
 
   async function submitJson(endpoint: string, body: Record<string, unknown>, method = 'POST') {
     if (!token && endpoint !== '/api/register' && endpoint !== '/api/login') {
-      throw new Error('You need to sign in first.');
+      throw new Error('Sign in first');
     }
 
     let response: Response;
@@ -400,22 +286,16 @@ export function DashboardShell() {
         body: JSON.stringify(body),
       });
     } catch (err) {
-      if (err instanceof TypeError && err.message.includes('fetch')) {
-        throw new Error('Network error: Unable to reach server');
-      }
-      throw err;
+      throw new Error('Network error');
     }
 
     if (response.status === 401) {
-      clearExpiredSession('Session expired. Please sign in again.');
-      throw new Error('Session expired. Please sign in again.');
+      clearExpiredSession('Session expired');
+      throw new Error('Session expired');
     }
 
     const text = await response.text();
-    if (!text.trim()) {
-      throw new Error('Empty response from server');
-    }
-
+    if (!text.trim()) throw new Error('Empty response');
     return JSON.parse(text) as AuthResponse | ActionResponse | ReportsResponse;
   }
 
@@ -425,14 +305,12 @@ export function DashboardShell() {
       setError('');
       try {
         const payload = (await submitJson('/api/login', loginForm)) as AuthResponse;
-        if (!payload.token) {
-          throw new Error(payload.error || 'Login failed');
-        }
+        if (!payload.token) throw new Error(payload.error || 'Login failed');
         setToken(payload.token);
         setEmail(loginForm.email);
         window.localStorage.setItem('token', payload.token);
         window.localStorage.setItem('email', loginForm.email);
-        setStatus(`Welcome back, ${loginForm.email}.`);
+        setStatus(`Welcome, ${loginForm.email}`);
         await fetchReports(payload.token);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Login failed');
@@ -445,12 +323,8 @@ export function DashboardShell() {
     startActionTransition(async () => {
       setError('');
       try {
-        const payload = (await submitJson('/api/register', registerForm)) as ActionResponse;
-        if (!('message' in payload) && !('status' in payload)) {
-          setStatus('Account created. Log in to continue.');
-        } else {
-          setStatus('Account created. Log in to continue.');
-        }
+        await submitJson('/api/register', registerForm);
+        setStatus('Account created. Sign in to continue.');
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Registration failed');
       }
@@ -461,15 +335,11 @@ export function DashboardShell() {
     startActionTransition(async () => {
       setError('');
       try {
-        const payload = (await submitJson('/api/audit', {
-          params: { scope: auditScope },
-        })) as ActionResponse;
-        if (!payload.status && !payload.message) {
-          throw new Error(payload.error || 'Failed to queue audit');
-        }
-        setStatus('Audit queued successfully. Refresh reports to review results.');
+        const payload = (await submitJson('/api/audit', { params: { scope: auditScope } })) as ActionResponse;
+        if (payload.error) throw new Error(payload.error);
+        setStatus('Audit queued. Refresh to see results.');
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to queue audit');
+        setError(err instanceof Error ? err.message : 'Failed to queue');
       }
     });
   }
@@ -478,22 +348,17 @@ export function DashboardShell() {
     startActionTransition(async () => {
       setError('');
       try {
-        if (!deletePassword) {
-          throw new Error('Enter your password to delete the account.');
-        }
+        if (!deletePassword) throw new Error('Enter password');
         const payload = (await submitJson('/api/account', { password: deletePassword }, 'DELETE')) as ActionResponse;
-        if (payload.error) {
-          throw new Error(payload.error);
-        }
+        if (payload.error) throw new Error(payload.error);
         window.localStorage.removeItem('token');
         window.localStorage.removeItem('email');
         setToken(null);
         setEmail('');
         setReports([]);
-        setDeletePassword('');
-        setStatus('Account deleted.');
+        setStatus('Account deleted');
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to delete account');
+        setError(err instanceof Error ? err.message : 'Failed to delete');
       }
     });
   }
@@ -507,333 +372,291 @@ export function DashboardShell() {
     setLoginForm(emptyCredentials);
     setRegisterForm(emptyCredentials);
     setDeletePassword('');
-    setAiSummary(null);
-    setStatus('Signed out.');
-  }
-
-  async function generateAiSummary() {
-    if (!latestReport || !token) return;
-
-    setAiSummaryLoading(true);
-    try {
-      const response = await fetch('/api/ai/summary', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify({ report: latestReport.report }),
-      });
-
-      if (!response.ok) {
-        const data = await response.json();
-        throw new Error(data.error || 'Failed to generate summary');
-      }
-
-      const data = await response.json();
-      setAiSummary(data.summary);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to generate AI summary');
-    } finally {
-      setAiSummaryLoading(false);
-    }
+    setStatus('Signed out');
   }
 
   return (
-    <main className="shell">
-      <header className="topbar">
-        <div className="brand-block">
-          <span className="eyebrow">Cloud-Sentinel</span>
-          <h1>Audit command center</h1>
-          <p>Run AWS scans, inspect history, and manage access from one clean surface.</p>
-        </div>
-
-        <div className="topbar-actions">
-          <span className="live-indicator">
-            <span className="pulse-dot"></span>
-            <span className={`session-pill ${token ? 'live' : 'idle'}`}>{token ? `Signed in as ${email}` : 'Signed out'}</span>
-          </span>
-          <button className="ghost" onClick={() => fetchReports()} disabled={!token || loadingReports}>
-            Refresh reports
-          </button>
-          <button className="ghost" onClick={handleLogout} disabled={!token}>
-            Logout
-          </button>
+    <div className="min-h-screen bg-background text-[#eef2ff] font-sans">
+      {/* Status Header */}
+      <header className="sticky top-0 z-50 bg-[#0a0a0f]/95 border-b border-slate-800 backdrop-blur">
+        <div className="flex items-center justify-between px-3 py-2">
+          <div className="flex items-center gap-2 font-mono text-xs tracking-wider">
+            <span className="text-slate-500">CORE</span>
+            <span className="text-slate-700">//</span>
+            <span className="text-amber-500">AUDIT</span>
+            <span className="text-slate-700">/</span>
+            <span className="text-cyan-400">AWS-{latestSummary?.scope?.toUpperCase() || 'S3'}</span>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-red-500"></span>
+              </span>
+              <span className="font-mono text-[10px] text-slate-400">LIVE-SYNC</span>
+            </div>
+            <span className={`text-[10px] font-mono ${token ? 'text-emerald-500' : 'text-slate-500'}`}>
+              {token ? `AUTH: ${email.split('@')[0].toUpperCase()}` : 'AUTH: NONE'}
+            </span>
+          </div>
         </div>
       </header>
 
-      <section className="hero">
-        <div className="hero-copy">
-          <div className="hero-kicker">
-            <span>Overview</span>
-            <span>{loadingReports || loadingAction ? 'Working…' : status}</span>
+      <div className="grid grid-cols-12 min-h-[calc(100vh-40px)]">
+        {/* Sidebar */}
+        <aside className="col-span-2 bg-[#0a0a0f] border-r border-slate-800 p-2">
+          <div className="mb-3">
+            <h1 className="font-mono text-sm font-bold tracking-wider text-amber-500">SENTINEL</h1>
+            <p className="text-[10px] text-slate-500 font-mono">v1.0.0 // GUARD</p>
           </div>
 
-          <div className="status-bar">
-            <strong>Current state</strong>
-            <span>{status}</span>
-          </div>
-          {error ? <div className="alert error">{error}</div> : null}
-        </div>
-
-        <div className="hero-panel">
-          {stats.map((stat, idx) => (
-            <StatCard key={stat.label} {...stat} />
-          ))}
-          <div className="mini-card">
-            <p>Live scan status</p>
-            <ul>
-              <li><span className="pulse-dot" style={{width:6,height:6,display:'inline-block',marginRight:8,verticalAlign:'middle'}}></span>Worker active</li>
-              <li>Redis: connected</li>
-              <li>Postgres: healthy</li>
-            </ul>
-          </div>
-        </div>
-      </section>
-
-      <section className="grid actions-grid">
-        <article className="card">
-          <h2>Register</h2>
-          <p className="card-copy">Create a user before signing in or queueing any audits.</p>
-          <form onSubmit={handleRegister} className="stack">
-            <input
-              type="email"
-              placeholder="email@company.com"
-              value={registerForm.email}
-              onChange={(event) => setRegisterForm({ ...registerForm, email: event.target.value })}
-            />
-            <input
-              type="password"
-              placeholder="Create a password"
-              value={registerForm.password}
-              onChange={(event) => setRegisterForm({ ...registerForm, password: event.target.value })}
-            />
-            <button className="primary" type="submit" disabled={loadingAction}>
-              Create account
-            </button>
-          </form>
-        </article>
-
-        <article className="card">
-          <h2>Login</h2>
-          <p className="card-copy">Authenticate to unlock report history and audit controls.</p>
-          <form onSubmit={handleLogin} className="stack">
-            <input
-              type="email"
-              placeholder="email@company.com"
-              value={loginForm.email}
-              onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })}
-            />
-            <input
-              type="password"
-              placeholder="Your password"
-              value={loginForm.password}
-              onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })}
-            />
-            <button className="primary" type="submit" disabled={loadingAction}>
-              Sign in
-            </button>
-          </form>
-        </article>
-
-        <article className="card">
-          <h2>Launch audit</h2>
-          <p className="card-copy">Send a scope to the worker queue and review the report after it completes.</p>
-          <div className="stack">
-            <input
-              type="text"
-              placeholder="scope, e.g. production"
-              value={auditScope}
-              onChange={(event) => setAuditScope(event.target.value)}
-            />
-            <button className="secondary" type="button" onClick={handleQueueAudit} disabled={!token || loadingAction}>
-              Queue AWS audit
-            </button>
-          </div>
-        </article>
-
-        <article className="card danger-card">
-          <h2>Delete account</h2>
-          <p className="card-copy">Permanently delete the user and all audit reports.</p>
-          <div className="stack">
-            <input
-              type="password"
-              placeholder="Confirm password"
-              value={deletePassword}
-              onChange={(event) => setDeletePassword(event.target.value)}
-            />
-            <button className="danger" type="button" onClick={handleDeleteAccount} disabled={!token || loadingAction}>
-              Delete account
-            </button>
-          </div>
-        </article>
-      </section>
-
-      <section className="insight-grid">
-        <article className="card insight-card insight-card-timeline">
-          <div className="section-header">
-            <div>
-              <span className="eyebrow">Risk timeline</span>
-              <h2>Security posture over time</h2>
+          <nav className="space-y-1">
+            <div className="text-[10px] font-mono text-slate-600 uppercase tracking-wider mb-2 px-2">Modules</div>
+            <div className="bg-slate-800/50 border-l-2 border-amber-500 px-2 py-1 cursor-pointer">
+              <span className="text-xs font-mono">DASHBOARD</span>
             </div>
-            <span className="metric-chip">Last 5 audits</span>
+            <div className="px-2 py-1 cursor-pointer hover:bg-slate-800/30">
+              <span className="text-xs font-mono text-slate-400">AUDIT-QUEUE</span>
+            </div>
+            <div className="px-2 py-1 cursor-pointer hover:bg-slate-800/30">
+              <span className="text-xs font-mono text-slate-400">REPORTS</span>
+            </div>
+            <div className="px-2 py-1 cursor-pointer hover:bg-slate-800/30">
+              <span className="text-xs font-mono text-slate-400">SETTINGS</span>
+            </div>
+          </nav>
+
+          {/* Auth Module */}
+          <div className="mt-6 pt-4 border-t border-slate-800">
+            <div className="text-[10px] font-mono text-slate-600 uppercase tracking-wider mb-2 px-2">Auth</div>
+            <div className="space-y-2">
+              <form onSubmit={handleLogin} className="space-y-1">
+                <input
+                  type="email"
+                  placeholder="email"
+                  value={loginForm.email}
+                  onChange={(e) => setLoginForm({ ...loginForm, email: e.target.value })}
+                  className="w-full bg-background border border-slate-700 rounded px-2 py-1 text-[10px] font-mono text-slate-300 placeholder-slate-600 focus:border-amber-500 outline-none"
+                />
+                <input
+                  type="password"
+                  placeholder="pass"
+                  value={loginForm.password}
+                  onChange={(e) => setLoginForm({ ...loginForm, password: e.target.value })}
+                  className="w-full bg-background border border-slate-700 rounded px-2 py-1 text-[10px] font-mono text-slate-300 placeholder-slate-600 focus:border-amber-500 outline-none"
+                />
+                <button type="submit" disabled={loadingAction} className="w-full bg-amber-600/20 border border-amber-600/50 text-amber-500 text-[10px] font-mono py-1 rounded hover:bg-amber-600/30">
+                  LOGIN
+                </button>
+              </form>
+            </div>
+          </div>
+        </aside>
+
+        {/* Main Stage */}
+        <main className="col-span-10 p-2 space-y-2">
+          {/* Metrics Row - 12 col grid */}
+          <div className="grid grid-cols-12 gap-2">
+            <div className="col-span-3 bg-[#0a0a0f] border-y border-r border-slate-800 p-2">
+              <div className="text-[10px] font-mono text-slate-500 uppercase">Risk Score</div>
+              <div className="text-2xl font-mono font-bold tabular-nums text-amber-500">
+                {latestSummary?.riskScore ?? '--'}/100
+              </div>
+              <div className="text-[10px] font-mono text-slate-600">{latestSummary?.riskLabel || 'No scan'}</div>
+            </div>
+            <div className="col-span-3 bg-[#0a0a0f] border-y border-r border-slate-800 p-2">
+              <div className="text-[10px] font-mono text-slate-500 uppercase">Reports</div>
+              <div className="text-2xl font-mono font-bold tabular-nums text-cyan-400">
+                {String(reports.length).padStart(2, '0')}
+              </div>
+              <div className="text-[10px] font-mono text-slate-600">Total audits</div>
+            </div>
+            <div className="col-span-3 bg-[#0a0a0f] border-y border-r border-slate-800 p-2">
+              <div className="text-[10px] font-mono text-slate-500 uppercase">Findings</div>
+              <div className="text-2xl font-mono font-bold tabular-nums text-red-400">
+                {latestSummary?.findingsCount ?? '0'}
+              </div>
+              <div className="text-[10px] font-mono text-slate-600">Issues detected</div>
+            </div>
+            <div className="col-span-3 bg-[#0a0a0f] border-y border-r border-slate-800 p-2">
+              <div className="text-[10px] font-mono text-slate-500 uppercase">Session</div>
+              <div className={`text-lg font-mono font-bold ${token ? 'text-emerald-500' : 'text-slate-600'}`}>
+                {token ? 'ACTIVE' : 'LOCKED'}
+              </div>
+              <div className="text-[10px] font-mono text-slate-600">{token ? email.split('@')[0] : 'Auth required'}</div>
+            </div>
           </div>
 
-          {timeline.length === 0 ? (
-            <div className="empty-state subtle-empty">
-              <p>No timeline yet.</p>
-              <span>Run at least one audit to see risk change across scans.</span>
+          {/* Audit Actions */}
+          <div className="grid grid-cols-4 gap-2">
+            <div className="bg-[#0a0a0f] border-y border-r border-slate-800 p-2">
+              <div className="text-[10px] font-mono text-amber-500 uppercase mb-1">Register</div>
+              <form onSubmit={handleRegister} className="space-y-1">
+                <input
+                  type="email"
+                  placeholder="email"
+                  value={registerForm.email}
+                  onChange={(e) => setRegisterForm({ ...registerForm, email: e.target.value })}
+                  className="w-full bg-background border border-slate-700 rounded px-2 py-1 text-[10px] font-mono text-slate-300 placeholder-slate-600"
+                />
+                <input
+                  type="password"
+                  placeholder="password"
+                  value={registerForm.password}
+                  onChange={(e) => setRegisterForm({ ...registerForm, password: e.target.value })}
+                  className="w-full bg-background border border-slate-700 rounded px-2 py-1 text-[10px] font-mono text-slate-300 placeholder-slate-600"
+                />
+                <button type="submit" disabled={loadingAction} className="w-full bg-slate-800 text-slate-400 text-[10px] font-mono py-1 rounded hover:bg-slate-700">
+                  CREATE
+                </button>
+              </form>
             </div>
-          ) : (
-            <div className="timeline-list">
-              {timeline.map((entry) => (
-                <article key={entry.id} className="timeline-item">
-                  <div className="timeline-head">
-                    <strong>Report #{entry.id}</strong>
-                    <span>{formatDate(entry.createdAt)}</span>
-                  </div>
-                  <div className="timeline-score">
-                    <span className={`score-pill ${entry.riskScore >= 75 ? 'critical' : entry.riskScore >= 45 ? 'elevated' : 'controlled'}`}>
-                      {entry.riskScore}/100
-                    </span>
-                    <span className={`trend-pill ${entry.delta === null ? 'flat' : entry.delta > 0 ? 'up' : entry.delta < 0 ? 'down' : 'flat'}`}>
-                      {entry.delta === null ? 'Start' : entry.delta > 0 ? `+${entry.delta}` : entry.delta < 0 ? `${entry.delta}` : 'No change'}
-                    </span>
-                  </div>
-                  <p>{entry.summary}</p>
-                </article>
-              ))}
+            <div className="bg-[#0a0a0f] border-y border-r border-slate-800 p-2">
+              <div className="text-[10px] font-mono text-cyan-400 uppercase mb-1">Queue Audit</div>
+              <div className="space-y-1">
+                <input
+                  type="text"
+                  placeholder="scope"
+                  value={auditScope}
+                  onChange={(e) => setAuditScope(e.target.value)}
+                  className="w-full bg-background border border-slate-700 rounded px-2 py-1 text-[10px] font-mono text-slate-300 placeholder-slate-600"
+                />
+                <button
+                  onClick={handleQueueAudit}
+                  disabled={!token || loadingAction}
+                  className="w-full bg-cyan-600/20 border border-cyan-600/50 text-cyan-400 text-[10px] font-mono py-1 rounded hover:bg-cyan-600/30 disabled:opacity-50"
+                >
+                  RUN-SCAN
+                </button>
+              </div>
             </div>
-          )}
-        </article>
-
-        <article className="card insight-card insight-card-evidence">
-          <div className="section-header">
-            <div>
-              <span className="eyebrow">Evidence mode</span>
-              <h2>What the scan proves</h2>
+            <div className="bg-[#0a0a0f] border-y border-r border-slate-800 p-2">
+              <div className="text-[10px] font-mono text-emerald-500 uppercase mb-1">Actions</div>
+              <div className="space-y-1">
+                <button
+                  onClick={() => fetchReports()}
+                  disabled={!token || loadingReports}
+                  className="w-full bg-slate-800 text-slate-400 text-[10px] font-mono py-1 rounded hover:bg-slate-700 disabled:opacity-50"
+                >
+                  REFRESH
+                </button>
+                <button
+                  onClick={handleLogout}
+                  disabled={!token}
+                  className="w-full bg-slate-800 text-slate-400 text-[10px] font-mono py-1 rounded hover:bg-slate-700 disabled:opacity-50"
+                >
+                  LOGOUT
+                </button>
+              </div>
             </div>
-            <span className="metric-chip">Latest report</span>
+            <div className="bg-[#0a0a0f] border-y border-r border-slate-800 p-2 border-l-2 border-l-red-600/50">
+              <div className="text-[10px] font-mono text-red-500 uppercase mb-1">Danger Zone</div>
+              <div className="space-y-1">
+                <input
+                  type="password"
+                  placeholder="password"
+                  value={deletePassword}
+                  onChange={(e) => setDeletePassword(e.target.value)}
+                  className="w-full bg-background border border-slate-700 rounded px-2 py-1 text-[10px] font-mono text-slate-300 placeholder-slate-600"
+                />
+                <button
+                  onClick={handleDeleteAccount}
+                  disabled={!token || loadingAction}
+                  className="w-full bg-red-600/20 border border-red-600/50 text-red-400 text-[10px] font-mono py-1 rounded hover:bg-red-600/30 disabled:opacity-50"
+                >
+                  DELETE-ACCT
+                </button>
+              </div>
+            </div>
           </div>
 
-          {evidence.length === 0 ? (
-            <div className="empty-state subtle-empty">
-              <p>No evidence loaded yet.</p>
-              <span>The latest report will populate proof, impact, and remediation details here.</span>
-            </div>
-          ) : (
-            <div className="finding-list terminal-style">
-              {evidence.map((finding) => (
-                <article key={finding.title} className={`finding-card ${finding.severity}`}>
-                  <div className="finding-head">
-                    <strong>{finding.title}</strong>
-                    <span className={`severity-badge ${finding.severity === 'high' ? 'warning' : finding.severity === 'good' ? 'secure' : finding.severity}`}>
-                      {finding.severity === 'high' ? 'Warning' : finding.severity === 'good' ? 'Secure' : finding.severity}
-                    </span>
-                  </div>
-                  <p><span>Evidence:</span> <span className="resource-id">{finding.evidence}</span></p>
-                  <p><span>Impact:</span> {finding.impact}</p>
-                  <p><span>Fix:</span> {finding.fix}</p>
-                </article>
-              ))}
-            </div>
-          )}
-        </article>
-
-        <article className="card insight-card insight-card-simulation">
-          <div className="section-header">
-            <div>
-              <span className="eyebrow">Simulation mode</span>
-              <h2>What if the state drifted?</h2>
-            </div>
-            <span className="metric-chip">Projected risk</span>
-          </div>
-
-          {simulations.length === 0 ? (
-            <div className="empty-state subtle-empty">
-              <p>No simulations ready.</p>
-              <span>Queue an audit first so the dashboard can project what changes would do.</span>
-            </div>
-          ) : (
-            <div className="simulation-grid">
-              {simulations.map((scenario) => (
-                <article key={scenario.title} className="simulation-card">
-                  <div className="simulation-head">
-                    <strong>{scenario.title}</strong>
-                    <span className="metric-chip">+{scenario.delta}</span>
-                  </div>
-                  <div className="simulation-score">
-                    <span>{scenario.projectedScore}/100</span>
-                    <small>projected</small>
-                  </div>
-                  <p>{scenario.evidence}</p>
-                  <p className="simulation-outcome">{scenario.outcome}</p>
-                </article>
-              ))}
-            </div>
-          )}
-        </article>
-      </section>
-
-      <section className="card reports-card">
-        <div className="section-header">
+          {/* Findings / Evidence Section */}
           <div>
-            <span className="eyebrow">History</span>
-            <h2>Past audit reports</h2>
-          </div>
-          <button className="ghost" onClick={() => fetchReports()} disabled={!token || loadingReports}>
-            Reload
-          </button>
-        </div>
-
-        {reports.length === 0 ? (
-          <div className="empty-state">
-            <p>No reports loaded yet.</p>
-            <span>Log in and queue an audit to populate the timeline.</span>
-          </div>
-        ) : (
-          <div className="report-list">
-            {reports.map((report) => (
-              <article key={report.id} className="report-item">
-                <div className="report-meta">
-                  <strong>Report #{report.id}</strong>
-                  <span>{formatDate(report.created_at)}</span>
+            <div className="text-[10px] font-mono text-slate-500 uppercase mb-1 px-1">FINDINGS // EVIDENCE-MODE</div>
+            <div className="space-y-1">
+              {evidence.length === 0 ? (
+                <div className="bg-[#0a0a0f] border border-slate-800 border-dashed p-3 text-center">
+                  <span className="text-[10px] font-mono text-slate-500">NO FINDINGS // RUN SCAN TO POPULATE</span>
                 </div>
-                <pre>{previewReport(report.report)}</pre>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-
-      {token && latestReport && (
-        <section className="card">
-          <div className="section-header">
-            <div>
-              <span className="eyebrow">AI Analysis</span>
-              <h2>Gemini-Powered Summary</h2>
+              ) : (
+                evidence.map((finding, idx) => (
+                  <div
+                    key={idx}
+                    className={`bg-[#0a0a0f] border-y border-r border-slate-800 p-2 ${
+                      finding.severity === 'critical' ? 'border-l-2 border-l-red-600' :
+                      finding.severity === 'high' ? 'border-l-2 border-l-amber-500' :
+                      'border-l-2 border-l-emerald-500'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between mb-1">
+                      <span className="text-xs font-mono font-bold">{finding.title}</span>
+                      <span className={`text-[10px] font-mono px-2 py-0.5 rounded ${
+                        finding.severity === 'critical' ? 'bg-red-900/50 text-red-400' :
+                        finding.severity === 'high' ? 'bg-amber-900/50 text-amber-400' :
+                        'bg-emerald-900/50 text-emerald-400'
+                      }`}>
+                        {finding.severity.toUpperCase()}
+                      </span>
+                    </div>
+                    <div className="text-[10px] font-mono text-slate-400">
+                      <span className="text-slate-500">EVIDENCE: </span>
+                      {finding.resourceArn ? (
+                        <code className="font-mono text-[10px] bg-slate-900/50 p-1 text-cyan-400/90">{finding.resourceArn}</code>
+                      ) : (
+                        <span>{finding.evidence}</span>
+                      )}
+                    </div>
+                    <div className="text-[10px] font-mono text-slate-500 mt-1">
+                      <span className="text-slate-600">IMPACT: </span>{finding.impact}
+                    </div>
+                    <div className="text-[10px] font-mono text-slate-600 mt-1">
+                      <span className="text-slate-500">FIX: </span>{finding.fix}
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
-            <button
-              className="ghost"
-              onClick={generateAiSummary}
-              disabled={loadingAction || aiSummaryLoading}
-            >
-              {aiSummaryLoading ? 'Generating...' : 'Regenerate'}
-            </button>
           </div>
-          {aiSummary ? (
-            <div className="ai-summary">{aiSummary}</div>
-          ) : (
-            <button
-              className="secondary"
-              onClick={generateAiSummary}
-              disabled={loadingAction || aiSummaryLoading}
-            >
-              {aiSummaryLoading ? 'Generating summary...' : 'Generate AI Summary'}
-            </button>
+
+          {/* Timeline */}
+          <div>
+            <div className="text-[10px] font-mono text-slate-500 uppercase mb-1 px-1">TIMELINE // LAST-5-AUDITS</div>
+            <div className="grid grid-cols-5 gap-1">
+              {timeline.length === 0 ? (
+                <div className="col-span-5 bg-[#0a0a0f] border border-slate-800 border-dashed p-3 text-center">
+                  <span className="text-[10px] font-mono text-slate-500">NO TIMELINE DATA</span>
+                </div>
+              ) : (
+                timeline.map((entry) => (
+                  <div key={entry.id} className="bg-[#0a0a0f] border-y border-r border-slate-800 p-2">
+                    <div className="text-[10px] font-mono text-amber-500">#{entry.id}</div>
+                    <div className="text-lg font-mono font-bold tabular-nums">{entry.riskScore}</div>
+                    <div className="text-[10px] font-mono text-slate-500">{formatTime(entry.createdAt)}</div>
+                    <div className={`text-[10px] font-mono ${entry.delta && entry.delta > 0 ? 'text-red-400' : entry.delta === 0 ? 'text-slate-400' : 'text-emerald-400'}`}>
+                      {entry.delta === null ? '--' : entry.delta > 0 ? `+${entry.delta}` : entry.delta}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Error Display */}
+          {error && (
+            <div className="bg-red-900/20 border border-red-600/50 p-2">
+              <span className="text-[10px] font-mono text-red-400">ERROR: {error}</span>
+            </div>
           )}
-        </section>
-      )}
-    </main>
+
+          {/* Status Bar */}
+          <div className="bg-[#0a0a0f] border border-slate-800 p-2">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] font-mono text-slate-500">STATUS:</span>
+              <span className="text-[10px] font-mono text-slate-400">{loadingReports || loadingAction ? 'PROCESSING...' : status}</span>
+            </div>
+          </div>
+        </main>
+      </div>
+    </div>
   );
 }
