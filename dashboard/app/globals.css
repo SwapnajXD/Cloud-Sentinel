@@ -1,8 +1,15 @@
+@import "tailwindcss";
+
 @import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700;800&display=swap');
 
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@theme {
+  --color-background: #0a0a0f;
+  --color-amber-400: #fbbf24;
+  --color-amber-500: #f59e0b;
+  --color-emerald-400: #34d399;
+  --color-emerald-500: #10b981;
+  --font-family-mono: 'JetBrains Mono', monospace;
+}
 
 :root {
   --bg: #0a0a0f;
