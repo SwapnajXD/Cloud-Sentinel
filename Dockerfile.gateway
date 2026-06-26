@@ -3,14 +3,10 @@ FROM node:20-alpine AS build
 
 WORKDIR /app
 
-# Install all deps (including dev)
 COPY package*.json ./
 RUN npm ci
 
-# Copy project files
 COPY . .
-
-# Build TypeScript
 RUN npm run build
 
 
@@ -19,12 +15,11 @@ FROM node:20-alpine
 
 WORKDIR /app
 
-# Install only production deps
+ENV NODE_ENV=production
+
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-# Copy compiled output
 COPY --from=build /app/dist ./dist
 
-# Start app
 CMD ["node", "dist/server.js"]

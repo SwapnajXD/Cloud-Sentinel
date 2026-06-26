@@ -6,7 +6,7 @@ services:
     image: cloud-sentinel-dashboard:latest
     environment:
       - NODE_ENV=production
-      - BACKEND_URL=http://gateway:3000
+      - BACKEND_URL=http://localhost
     ports:
       - "3001:3000"
     depends_on:
@@ -23,6 +23,7 @@ services:
       - ../.env
     environment:
       - NODE_ENV=production
+      - REDIS_URL=redis://redis:6379
     ports:
       - "3000:3000"
     depends_on:
