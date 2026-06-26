@@ -53,7 +53,6 @@ services:
     image: redis:7-alpine
     restart: unless-stopped
     ports:
-      - "6379:6379"
     volumes:
       - redis_data:/data
     networks:
@@ -69,7 +68,6 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d cloud_sentinel"]
       interval: 5s
