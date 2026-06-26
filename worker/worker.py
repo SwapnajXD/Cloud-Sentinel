@@ -2,10 +2,6 @@ import json
 import os
 import time
 from datetime import datetime, timezone
-
-os.environ.pop("AWS_PROFILE", None)
-os.environ.pop("AWS_DEFAULT_PROFILE", None)
-
 import boto3
 import psycopg2
 import redis
@@ -28,27 +24,17 @@ def get_redis_client():
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
 
-
 def get_aws_clients():
-    # Debug: Check what credentials we have
-    print(f"DEBUG: AWS_KEY={AWS_KEY[:10] if AWS_KEY else 'MISSING'}...")
-    print(f"DEBUG: AWS_SECRET={AWS_SECRET[:10] if AWS_SECRET else 'MISSING'}...")
-    print(f"DEBUG: AWS_TOKEN={'PRESENT' if AWS_TOKEN else 'MISSING'}")
-    print(f"DEBUG: AWS_REGION={AWS_REGION}")
-    
-    session = boto3.session.Session(
-        region_name=AWS_REGION,
-        aws_access_key_id=AWS_KEY if AWS_KEY else None,
-        aws_secret_access_key=AWS_SECRET if AWS_SECRET else None,
-        aws_session_token=AWS_TOKEN if AWS_TOKEN else None,
-    )
+    print("Using AWS credentials from environment")
+
+    session = boto3.Session(region_name=AWS_REGION)
+
     return {
         "s3": session.client("s3"),
         "ec2": session.client("ec2"),
         "iam": session.client("iam"),
         "sts": session.client("sts"),
     }
-
 
 def ensure_schema(conn):
     with conn.cursor() as cursor:
@@ -222,12 +208,13 @@ def run_worker():
 
     while True:
         try:
-            item = client.brpop("audit_tasks", timeout=5)
-            if not item:
-                time.sleep(1)
-                continue
+            item = client.brpop("audit_tasks", timeout=0)
+
+            if item is None:
+                continue  # just wait again, no logs
 
             _, payload = item
+
             try:
                 task = parse_task(payload)
             except Exception:
@@ -235,10 +222,15 @@ def run_worker():
                 continue
 
             result = process_task(task)
-            print("Processed task:", result["status"], result.get("report_id"))
+            print("✅ Processed task:", result["status"], result.get("report_id"))
+
+        except redis.exceptions.TimeoutError:
+            # ✅ IGNORE silently
+            continue
+
         except Exception as exc:
-            print("Worker error:", exc)
-            time.sleep(5)
+            print("❌ Worker error:", exc)
+            time.sleep(2)
 
 
 def main():

@@ -1,8 +1,30 @@
-FROM node:18-alpine
-WORKDIR /usr/src/app
+# ---------- BUILD STAGE ----------
+FROM node:20-alpine AS build
+
+WORKDIR /app
+
+# Install all deps (including dev)
 COPY package*.json ./
-RUN npm ci --only=production
+RUN npm ci
+
+# Copy project files
 COPY . .
+
+# Build TypeScript
 RUN npm run build
-EXPOSE 3000
+
+
+# ---------- RUNTIME STAGE ----------
+FROM node:20-alpine
+
+WORKDIR /app
+
+# Install only production deps
+COPY package*.json ./
+RUN npm ci --omit=dev
+
+# Copy compiled output
+COPY --from=build /app/dist ./dist
+
+# Start app
 CMD ["node", "dist/server.js"]
