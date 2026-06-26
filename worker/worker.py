@@ -1,20 +1,15 @@
 import json
 import os
 import time
-from datetime import datetime, timezone
 import boto3
 import psycopg2
 import redis
 
+from services.audit import build_audit_report
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 DATABASE_URL = os.getenv("DATABASE_URL", "postgres://postgres:postgres@db:5432/cloud_sentinel")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-
-# Debug: Check if AWS credentials are loaded
-AWS_KEY = os.getenv("AWS_ACCESS_KEY_ID", "")
-AWS_SECRET = os.getenv("AWS_SECRET_ACCESS_KEY", "")
-AWS_TOKEN = os.getenv("AWS_SESSION_TOKEN", "")
 
 
 def get_redis_client():
@@ -23,6 +18,7 @@ def get_redis_client():
 
 def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
+
 
 def get_aws_clients():
     print("Using AWS credentials from environment")
@@ -35,6 +31,7 @@ def get_aws_clients():
         "iam": session.client("iam"),
         "sts": session.client("sts"),
     }
+
 
 def ensure_schema(conn):
     with conn.cursor() as cursor:
@@ -49,7 +46,6 @@ def ensure_schema(conn):
             )
             """
         )
-        # Create index for faster queries by user_id and created_at
         cursor.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_audit_reports_user_created
@@ -59,112 +55,9 @@ def ensure_schema(conn):
     conn.commit()
 
 
-def list_unencrypted_s3_buckets(s3_client):
-    buckets = s3_client.list_buckets().get("Buckets", [])
-    findings = []
-
-    for bucket in buckets:
-        bucket_name = bucket["Name"]
-        try:
-            encryption = s3_client.get_bucket_encryption(Bucket=bucket_name)
-            rules = encryption["ServerSideEncryptionConfiguration"]["Rules"]
-            findings.append({
-                "bucket": bucket_name,
-                "encrypted": True,
-                "details": rules,
-            })
-        except Exception:
-            findings.append({
-                "bucket": bucket_name,
-                "encrypted": False,
-                "details": "No bucket encryption configuration found",
-            })
-
-    return findings
-
-
-def list_running_ec2_instances(ec2_client):
-    response = ec2_client.describe_instances(
-        Filters=[{"Name": "instance-state-name", "Values": ["running"]}]
-    )
-    instances = []
-
-    for reservation in response.get("Reservations", []):
-        for instance in reservation.get("Instances", []):
-            instances.append({
-                "instance_id": instance.get("InstanceId"),
-                "state": instance.get("State", {}).get("Name"),
-                "type": instance.get("InstanceType"),
-                "public_ip": instance.get("PublicIpAddress"),
-            })
-
-    return instances
-
-
-def check_mfa_for_current_user(iam_client, sts_client):
-    caller = sts_client.get_caller_identity()
-    arn = caller.get("Arn", "")
-    user_name = None
-
-    if ":user/" in arn:
-        user_name = arn.split("/", 1)[1]
-
-    if not user_name:
-        return {
-            "enabled": False,
-            "status": "unavailable",
-            "details": "Current identity is not an IAM user",
-        }
-
-    response = iam_client.list_mfa_devices(UserName=user_name)
-    enabled = len(response.get("MFADevices", [])) > 0
-    return {
-        "enabled": enabled,
-        "status": "enabled" if enabled else "disabled",
-        "user_name": user_name,
-    }
-
-
-def build_audit_report(task, aws_clients):
-    findings = []
-
-    s3_buckets = list_unencrypted_s3_buckets(aws_clients["s3"])
-    for bucket in s3_buckets:
-        findings.append({
-            "severity": "critical" if not bucket.get("encrypted") else "good",
-            "type": "S3Encryption",
-            "resource": bucket.get("bucket"),
-            "details": bucket.get("details"),
-        })
-
-    ec2_instances = list_running_ec2_instances(aws_clients["ec2"])
-    for instance in ec2_instances:
-        findings.append({
-            "severity": "medium",
-            "type": "EC2Instance",
-            "resource": instance.get("instance_id"),
-            "details": f"Type: {instance.get('type')}, State: {instance.get('state')}",
-        })
-
-    mfa_status = check_mfa_for_current_user(aws_clients["iam"], aws_clients["sts"])
-    findings.append({
-        "severity": "critical" if not mfa_status.get("enabled") else "good",
-        "type": "IAMMFA",
-        "resource": mfa_status.get("user_name", "N/A"),
-        "details": f"MFA Status: {mfa_status.get('status')}",
-    })
-
-    return {
-        "task_id": task.get("task_id"),
-        "action": task.get("action"),
-        "user_id": task["user_id"],
-        "requested_at": task.get("requested_at") or datetime.now(timezone.utc).isoformat(),
-        "findings": findings,
-    }
-
-
 def save_audit_report(conn, task, report):
     ensure_schema(conn)
+
     with conn.cursor() as cursor:
         cursor.execute(
             """
@@ -175,24 +68,26 @@ def save_audit_report(conn, task, report):
             (task["user_id"], task.get("task_id"), json.dumps(report)),
         )
         report_id = cursor.fetchone()[0]
+
     conn.commit()
     return report_id
 
 
 def process_task(task, aws_clients=None, conn=None):
     if task.get("action") != "start_audit":
-        return {"status": "ignored", "reason": "unsupported action"}
+        return {"status": "ignored"}
 
     aws_clients = aws_clients or get_aws_clients()
-    should_close_conn = conn is None
+    should_close = conn is None
     conn = conn or get_db_connection()
 
     try:
         report = build_audit_report(task, aws_clients)
         report_id = save_audit_report(conn, task, report)
-        return {"status": "ok", "report_id": report_id, "report": report}
+
+        return {"status": "ok", "report_id": report_id}
     finally:
-        if should_close_conn:
+        if should_close:
             conn.close()
 
 
@@ -204,6 +99,7 @@ def parse_task(payload):
 
 def run_worker():
     client = get_redis_client()
+
     print("Worker started, listening for audit_tasks...")
 
     while True:
@@ -211,25 +107,18 @@ def run_worker():
             item = client.brpop("audit_tasks", timeout=0)
 
             if item is None:
-                continue  # just wait again, no logs
-
-            _, payload = item
-
-            try:
-                task = parse_task(payload)
-            except Exception:
-                print("Invalid task payload:", payload)
                 continue
 
+            _, payload = item
+            task = parse_task(payload)
+
             result = process_task(task)
-            print("✅ Processed task:", result["status"], result.get("report_id"))
+            print("✅ Processed:", result)
 
         except redis.exceptions.TimeoutError:
-            # ✅ IGNORE silently
             continue
-
-        except Exception as exc:
-            print("❌ Worker error:", exc)
+        except Exception as e:
+            print("❌ Worker error:", e)
             time.sleep(2)
 
 
