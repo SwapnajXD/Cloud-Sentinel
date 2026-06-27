@@ -4,20 +4,25 @@ from scans.s3 import (
     list_unencrypted_s3_buckets,
     check_public_s3_buckets,
 )
+
 from scans.ec2 import (
     list_running_ec2_instances,
     check_open_security_groups,
 )
+
 from scans.iam import (
     check_mfa_for_current_user,
     check_root_mfa_enabled,
 )
 
 
-def build_audit_report(task, aws_clients):
+def build_audit_report(task, aws_clients, mode="aws"):
     findings = []
 
-    # S3 Encryption
+    # =========================
+    # ✅ S3 Encryption
+    # =========================
+
     for bucket in list_unencrypted_s3_buckets(aws_clients["s3"]):
         findings.append({
             "severity": "critical" if not bucket["encrypted"] else "good",
@@ -26,10 +31,16 @@ def build_audit_report(task, aws_clients):
             "details": bucket["details"],
         })
 
-    # S3 Public
+    # =========================
+    # ✅ S3 Public Access
+    # =========================
+
     findings.extend(check_public_s3_buckets(aws_clients["s3"]))
 
-    # EC2 Instances
+    # =========================
+    # ✅ EC2 Instances
+    # =========================
+
     for instance in list_running_ec2_instances(aws_clients["ec2"]):
         findings.append({
             "severity": "medium",
@@ -38,13 +49,21 @@ def build_audit_report(task, aws_clients):
             "details": f"Type: {instance['type']}, State: {instance['state']}",
         })
 
-    # Security Groups
+    # =========================
+    # ✅ Security Groups
+    # =========================
+
     findings.extend(check_open_security_groups(aws_clients["ec2"]))
 
-    # IAM MFA
-    mfa = check_mfa_for_current_user(
-        aws_clients["iam"], aws_clients["sts"]
-    )
+    # =========================
+    # ✅ IAM MFA
+    # =========================
+    try:
+        mfa = check_mfa_for_current_user(
+            aws_clients["iam"], aws_clients["sts"]
+        )
+    except Exception:
+        mfa = {"enabled": False, "status": "unknown"}
 
     findings.append({
         "severity": "critical" if not mfa["enabled"] else "good",
@@ -53,12 +72,26 @@ def build_audit_report(task, aws_clients):
         "details": f"MFA Status: {mfa['status']}",
     })
 
-    # Root MFA
-    findings.extend(
-        check_root_mfa_enabled(
-            aws_clients["iam"], aws_clients["sts"]
+    # =========================
+    # ✅ Root MFA
+    # =========================
+    if mode == "aws":
+        findings.extend(
+            check_root_mfa_enabled(
+                aws_clients["iam"], aws_clients["sts"]
+            )
         )
-    )
+    else:
+        findings.append({
+            "severity": "info",
+            "type": "IAMRootMFA",
+            "resource": "N/A",
+            "details": "Skipped (not supported in Floci)",
+        })
+    
+    # =========================
+    # ✅ FINAL OUTPUT
+    # =========================
 
     return {
         "task_id": task.get("task_id"),

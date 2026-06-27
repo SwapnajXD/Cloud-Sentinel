@@ -1,8 +1,9 @@
 // ==============================
-// ✅ Base URL (IMPORTANT)
+// ✅ Base URL
 // ==============================
 
 const BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL!;
+
 
 // ==============================
 // ✅ Core API request helper
@@ -13,7 +14,7 @@ export async function apiRequest<T>(
   options: RequestInit = {},
   token?: string
 ): Promise<T> {
-  const res = await fetch(endpoint, {
+  const res = await fetch(`${BASE_URL}${endpoint}`, {
     ...options,
     headers: {
       "Content-Type": "application/json",
@@ -22,8 +23,9 @@ export async function apiRequest<T>(
     },
   });
 
-  if (res.status === 401) {
-    throw new Error("Session expired");
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Request failed: ${endpoint}`);
   }
 
   const text = await res.text();
@@ -32,12 +34,9 @@ export async function apiRequest<T>(
     throw new Error(`Empty response from ${endpoint}`);
   }
 
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new Error(`Invalid JSON response from ${endpoint}`);
-  }
+  return JSON.parse(text);
 }
+
 
 // ==============================
 // ✅ Types
@@ -58,11 +57,12 @@ export type ActionResponse = {
   error?: string;
 };
 
+
 // ==============================
 // ✅ API Helpers
 // ==============================
 
-// 🔐 Login
+// 🔐 Login (FULL URL OK)
 export async function login(email: string, password: string) {
   const res = await fetch(`${BASE_URL}/api/login`, {
     method: "POST",
@@ -80,7 +80,8 @@ export async function login(email: string, password: string) {
   return res.json();
 }
 
-// 🆕 Register
+
+// 🆕 Register (FULL URL OK)
 export async function register(email: string, password: string) {
   const res = await fetch(`${BASE_URL}/api/register`, {
     method: "POST",
@@ -98,22 +99,29 @@ export async function register(email: string, password: string) {
   return res.json();
 }
 
-// 📊 Fetch reports
+
+// 📊 Fetch reports (✅ FIXED — RELATIVE PATH)
 export function getReports(token: string) {
   return apiRequest<ReportsResponse>(
-    `${BASE_URL}/api/reports`,
+    "/api/reports",
     {},
     token
   );
 }
 
-// 🚀 Queue audit
-export function queueAudit(token: string, scope: string) {
+
+// 🚀 Queue audit (✅ FIXED — RELATIVE PATH)
+export function queueAudit(
+  token: string,
+  scope: string,
+  mode: "aws" | "floci" = "aws"
+) {
   return apiRequest<ActionResponse>(
-    `${BASE_URL}/api/audit`,
+    "/api/audit",
     {
       method: "POST",
       body: JSON.stringify({
+        mode, // ✅ NEW
         params: { scope },
       }),
     },
@@ -121,10 +129,11 @@ export function queueAudit(token: string, scope: string) {
   );
 }
 
-// ❌ Delete account
+
+// ❌ Delete account (✅ FIXED — RELATIVE PATH)
 export function deleteAccount(token: string, password: string) {
   return apiRequest<ActionResponse>(
-    `${BASE_URL}/api/account`,
+    "/api/account",
     {
       method: "DELETE",
       body: JSON.stringify({ password }),

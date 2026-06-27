@@ -1,7 +1,16 @@
 #!/bin/bash
 
-# export AWS creds automatically
-eval $(aws configure export-credentials --format env)
+set -e
 
-# run docker with env
-sudo docker compose -f infra/docker-compose.yml up --build
+echo "🔐 Logging into AWS..."
+aws login
+
+echo "📦 Exporting AWS credentials..."
+aws configure export-credentials --format env > .aws.env
+
+echo "✅ Credentials saved to .aws.env"
+
+echo "🐳 Starting Docker..."
+sudo docker compose -f infra/docker-compose.yml \
+  --env-file .aws.env \
+  up --build

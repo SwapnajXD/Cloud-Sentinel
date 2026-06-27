@@ -184,17 +184,22 @@ app.post('/api/audit', authenticateJWT, async (req: Request, res: Response) => {
   try {
     const user = req.user!;
 
+    // ✅ NEW: accept mode from frontend
+    const mode = req.body.mode === "floci" ? "floci" : "aws";
+
     const task = {
       action: 'start_audit',
       user_id: user.id,
       requested_at: new Date().toISOString(),
+      mode, // ✅ IMPORTANT
       params: req.body.params || {},
     };
 
     await redisClient.lPush('audit_tasks', JSON.stringify(task));
 
-    res.status(202).json({ status: 'queued' });
+    res.status(202).json({ status: 'queued', mode });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: 'queue failed' });
   }
 });

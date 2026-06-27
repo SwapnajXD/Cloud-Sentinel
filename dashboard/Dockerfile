@@ -1,30 +1,23 @@
-FROM node:20-alpine AS base
+# ---------- BUILD ----------
+FROM node:20-alpine AS builder
+
 WORKDIR /app
 
-# -------------------------
-# ✅ Install dependencies
-# -------------------------
-FROM base AS deps
-COPY package.json ./
+COPY package*.json ./
 RUN npm install
 
-# -------------------------
-# ✅ Build app
-# -------------------------
-FROM base AS builder
-COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run build
 
-# -------------------------
-# ✅ Production runtime
-# -------------------------
-FROM node:20-alpine AS runner
+
+# ---------- RUN ----------
+FROM node:20-alpine
+
 WORKDIR /app
 
 ENV NODE_ENV=production
-ENV PORT=3000
 
+# ✅ Copy standalone output ONLY
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
 
