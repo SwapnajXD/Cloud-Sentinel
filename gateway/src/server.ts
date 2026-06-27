@@ -28,7 +28,7 @@ app.use(express.json());
 app.use(morgan('combined'));
 app.use(
   cors({
-    origin: "http://localhost:3001",
+    origin: true, // ✅ allow ALL origins in dev
     credentials: true,
   })
 );

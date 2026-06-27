@@ -1,12 +1,7 @@
 import json
 import psycopg2
 import os
-import time
-import sys
-import boto3
-import redis
-
-# ✅ Fix Python path
+# ✅ Fix Python pathimport time
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 from services.audit import build_audit_report
@@ -24,9 +19,6 @@ DATABASE_URL = os.getenv(
 )
 
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-
-# 👉 IMPORTANT: this should point to your homelab Floci
-# Example: http://192.168.1.50:4566
 FLOCI_ENDPOINT = os.getenv("FLOCI_ENDPOINT", None)
 
 
@@ -42,18 +34,13 @@ def get_db_connection():
 
 
 def get_aws_clients(mode="aws"):
-    """
-    mode = "aws"   → real AWS
-    mode = "floci" → homelab AWS emulator
-    """
-
     session = boto3.Session(region_name=AWS_REGION)
 
     if mode == "floci":
         if not FLOCI_ENDPOINT:
             raise ValueError("FLOCI_ENDPOINT not set")
 
-        print(f"⚡ Using FLOCI at {FLOCI_ENDPOINT}")
+        print(f"[MODE] ⚡ Using FLOCI at {FLOCI_ENDPOINT}")
 
         return {
             "s3": session.client("s3", endpoint_url=FLOCI_ENDPOINT),
@@ -62,7 +49,7 @@ def get_aws_clients(mode="aws"):
             "sts": session.client("sts", endpoint_url=FLOCI_ENDPOINT),
         }
 
-    print("☁️ Using REAL AWS")
+    print("[MODE] ☁️ Using REAL AWS")
 
     return {
         "s3": session.client("s3"),
@@ -118,29 +105,58 @@ def save_audit_report(conn, task, report):
 
 
 # =========================
-# ✅ Task processing
+# ✅ Task processing (OBSERVABILITY ADDED)
 # =========================
 def process_task(task, conn=None):
     if task.get("action") != "start_audit":
         return {"status": "ignored"}
 
-    mode = task.get("mode", "aws")  # ✅ default = AWS
-
+    mode = task.get("mode", "aws")
     aws_clients = get_aws_clients(mode)
 
     should_close = conn is None
     conn = conn or get_db_connection()
 
-    try:
-        print("📥 Received task:", task)
-        print(f"🔍 Running audit for user: {task['user_id']} (mode={mode})")
+    start_time = time.time()
 
+    try:
+        print("=" * 60)
+        print(f"[TASK RECEIVED] {task}")
+        print(f"[AUDIT START] user={task['user_id']} mode={mode}")
+
+        # ✅ Run audit
         report = build_audit_report(task, aws_clients, mode=mode)
+
+        findings = report.get("findings", []) if isinstance(report, dict) else []
+
+        print(f"[FINDINGS] count={len(findings)}")
+
+        # ✅ Save report
         report_id = save_audit_report(conn, task, report)
 
-        print(f"✅ Audit complete → report_id={report_id}")
+        duration = time.time() - start_time
+
+        # ✅ Metrics log
+        metrics = {
+            "timestamp": datetime.utcnow().isoformat(),
+            "user_id": task["user_id"],
+            "mode": mode,
+            "report_id": report_id,
+            "findings_count": len(findings),
+            "duration_sec": round(duration, 2),
+        }
+
+        print(f"[AUDIT COMPLETE] report_id={report_id} time={duration:.2f}s")
+        print(f"[METRICS] {json.dumps(metrics)}")
+        print("=" * 60)
 
         return {"status": "ok", "report_id": report_id}
+
+    except Exception as e:
+        duration = time.time() - start_time
+        print(f"[AUDIT ERROR] user={task['user_id']} error={str(e)}")
+        print(f"[FAILED AFTER] {duration:.2f}s")
+        return {"status": "error", "error": str(e)}
 
     finally:
         if should_close:
@@ -166,12 +182,13 @@ def run_worker():
             task = json.loads(payload.decode("utf-8"))
 
             result = process_task(task)
-            print("✅ Processed:", result)
+            print("[RESULT]", result)
 
         except redis.exceptions.TimeoutError:
             continue
+
         except Exception as e:
-            print(f"❌ Worker error: {e}")
+            print(f"❌ Worker crash: {e}")
             time.sleep(2)
 
 
@@ -184,3 +201,8 @@ def main():
 
 if __name__ == "__main__":
     main()
+import sys
+import boto3
+import redis
+from datetime import datetime
+

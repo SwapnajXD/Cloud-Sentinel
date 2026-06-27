@@ -23,11 +23,14 @@ export async function apiRequest<T>(
     },
   });
 
+  // ✅ FIXED: Proper error handling
   if (!res.ok) {
     const text = await res.text();
+    console.error("API ERROR:", endpoint, text);
     throw new Error(text || `Request failed: ${endpoint}`);
   }
 
+  // ✅ Parse response safely
   const text = await res.text();
 
   if (!text.trim()) {
@@ -62,7 +65,7 @@ export type ActionResponse = {
 // ✅ API Helpers
 // ==============================
 
-// 🔐 Login (FULL URL OK)
+// 🔐 Login
 export async function login(email: string, password: string) {
   const res = await fetch(`${BASE_URL}/api/login`, {
     method: "POST",
@@ -81,7 +84,7 @@ export async function login(email: string, password: string) {
 }
 
 
-// 🆕 Register (FULL URL OK)
+// 🆕 Register
 export async function register(email: string, password: string) {
   const res = await fetch(`${BASE_URL}/api/register`, {
     method: "POST",
@@ -100,7 +103,7 @@ export async function register(email: string, password: string) {
 }
 
 
-// 📊 Fetch reports (✅ FIXED — RELATIVE PATH)
+// 📊 Fetch reports
 export function getReports(token: string) {
   return apiRequest<ReportsResponse>(
     "/api/reports",
@@ -110,7 +113,7 @@ export function getReports(token: string) {
 }
 
 
-// 🚀 Queue audit (✅ FIXED — RELATIVE PATH)
+// 🚀 Queue audit
 export function queueAudit(
   token: string,
   scope: string,
@@ -121,7 +124,7 @@ export function queueAudit(
     {
       method: "POST",
       body: JSON.stringify({
-        mode, // ✅ NEW
+        mode,
         params: { scope },
       }),
     },
@@ -130,7 +133,7 @@ export function queueAudit(
 }
 
 
-// ❌ Delete account (✅ FIXED — RELATIVE PATH)
+// ❌ Delete account
 export function deleteAccount(token: string, password: string) {
   return apiRequest<ActionResponse>(
     "/api/account",
