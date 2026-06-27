@@ -1,17 +1,30 @@
 import json
+import psycopg2
 import os
 import time
+import sys
 import boto3
-import psycopg2
 import redis
+# ✅ Fix Python path (IMPORTANT)
+sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 from services.audit import build_audit_report
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
-DATABASE_URL = os.getenv("DATABASE_URL", "postgres://postgres:postgres@db:5432/cloud_sentinel")
+
+# =========================
+# ✅ Environment config
+# =========================
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "postgres://postgres:postgres@localhost:5432/cloud_sentinel"
+)
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 
 
+# =========================
+# ✅ Clients
+# =========================
 def get_redis_client():
     return redis.from_url(REDIS_URL)
 
@@ -33,6 +46,9 @@ def get_aws_clients():
     }
 
 
+# =========================
+# ✅ Schema
+# =========================
 def ensure_schema(conn):
     with conn.cursor() as cursor:
         cursor.execute(
@@ -40,7 +56,6 @@ def ensure_schema(conn):
             CREATE TABLE IF NOT EXISTS audit_reports (
                 id SERIAL PRIMARY KEY,
                 user_id INTEGER NOT NULL,
-                task_id TEXT,
                 report JSONB NOT NULL,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
@@ -55,17 +70,20 @@ def ensure_schema(conn):
     conn.commit()
 
 
+# =========================
+# ✅ Save report
+# =========================
 def save_audit_report(conn, task, report):
     ensure_schema(conn)
 
     with conn.cursor() as cursor:
         cursor.execute(
             """
-            INSERT INTO audit_reports (user_id, task_id, report)
-            VALUES (%s, %s, %s)
+            INSERT INTO audit_reports (user_id, report)
+            VALUES (%s, %s)
             RETURNING id
             """,
-            (task["user_id"], task.get("task_id"), json.dumps(report)),
+            (task["user_id"], json.dumps(report)),
         )
         report_id = cursor.fetchone()[0]
 
@@ -73,6 +91,9 @@ def save_audit_report(conn, task, report):
     return report_id
 
 
+# =========================
+# ✅ Task processing
+# =========================
 def process_task(task, aws_clients=None, conn=None):
     if task.get("action") != "start_audit":
         return {"status": "ignored"}
@@ -82,6 +103,9 @@ def process_task(task, aws_clients=None, conn=None):
     conn = conn or get_db_connection()
 
     try:
+        print("📥 Received task:", task)
+        print("🔍 Running audit for user:", task["user_id"])
+
         report = build_audit_report(task, aws_clients)
         report_id = save_audit_report(conn, task, report)
 
@@ -91,16 +115,13 @@ def process_task(task, aws_clients=None, conn=None):
             conn.close()
 
 
-def parse_task(payload):
-    if isinstance(payload, bytes):
-        payload = payload.decode("utf-8")
-    return json.loads(payload)
-
-
+# =========================
+# ✅ Worker loop
+# =========================
 def run_worker():
     client = get_redis_client()
 
-    print("Worker started, listening for audit_tasks...")
+    print("🚀 Worker started, listening for audit_tasks...")
 
     while True:
         try:
@@ -110,7 +131,7 @@ def run_worker():
                 continue
 
             _, payload = item
-            task = parse_task(payload)
+            task = json.loads(payload.decode("utf-8"))
 
             result = process_task(task)
             print("✅ Processed:", result)
@@ -122,9 +143,13 @@ def run_worker():
             time.sleep(2)
 
 
+# =========================
+# ✅ Entry
+# =========================
 def main():
     run_worker()
 
 
 if __name__ == "__main__":
     main()
+

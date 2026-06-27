@@ -26,7 +26,12 @@ app.set('trust proxy', 1);
 app.use(helmet());
 app.use(express.json());
 app.use(morgan('combined'));
-app.use(cors({ origin: process.env.ALLOWED_ORIGIN || false }));
+app.use(
+  cors({
+    origin: "http://localhost:3001",
+    credentials: true,
+  })
+);
 
 const limiter = rateLimit({
   windowMs: 1 * 60 * 1000,

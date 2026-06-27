@@ -1,4 +1,10 @@
 // ==============================
+// ✅ Base URL (IMPORTANT)
+// ==============================
+
+const BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL!;
+
+// ==============================
 // ✅ Core API request helper
 // ==============================
 
@@ -16,12 +22,10 @@ export async function apiRequest<T>(
     },
   });
 
-  // ✅ Handle auth expiration
   if (res.status === 401) {
     throw new Error("Session expired");
   }
 
-  // ✅ Read response safely
   const text = await res.text();
 
   if (!text.trim()) {
@@ -55,34 +59,58 @@ export type ActionResponse = {
 };
 
 // ==============================
-// ✅ API Helpers (Readable)
+// ✅ API Helpers
 // ==============================
 
 // 🔐 Login
-export function login(email: string, password: string) {
-  return apiRequest<AuthResponse>("/api/login", {
+export async function login(email: string, password: string) {
+  const res = await fetch(`${BASE_URL}/api/login`, {
     method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({ email, password }),
   });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Login failed");
+  }
+
+  return res.json();
 }
 
 // 🆕 Register
-export function register(email: string, password: string) {
-  return apiRequest("/api/register", {
+export async function register(email: string, password: string) {
+  const res = await fetch(`${BASE_URL}/api/register`, {
     method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
     body: JSON.stringify({ email, password }),
   });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || "Registration failed");
+  }
+
+  return res.json();
 }
 
 // 📊 Fetch reports
 export function getReports(token: string) {
-  return apiRequest<ReportsResponse>("/api/reports", {}, token);
+  return apiRequest<ReportsResponse>(
+    `${BASE_URL}/api/reports`,
+    {},
+    token
+  );
 }
 
 // 🚀 Queue audit
 export function queueAudit(token: string, scope: string) {
   return apiRequest<ActionResponse>(
-    "/api/audit",
+    `${BASE_URL}/api/audit`,
     {
       method: "POST",
       body: JSON.stringify({
@@ -96,7 +124,7 @@ export function queueAudit(token: string, scope: string) {
 // ❌ Delete account
 export function deleteAccount(token: string, password: string) {
   return apiRequest<ActionResponse>(
-    "/api/account",
+    `${BASE_URL}/api/account`,
     {
       method: "DELETE",
       body: JSON.stringify({ password }),
