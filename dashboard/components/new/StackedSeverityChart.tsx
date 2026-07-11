@@ -35,19 +35,33 @@ export default function StackedSeverityChart({ reports }: any) {
     .reverse();
 
   return (
-    <div className="bg-[#FFF2DB] p-6 rounded-xl shadow">
+    <div className="bg-cardBg border border-brandBorder backdrop-blur-sm p-6 rounded-xl shadow hover:shadow-xl hover:-translate-y-1 transition-all duration-200">
       <h2 className="text-lg font-semibold mb-4">
         📊 Severity Breakdown Over Time
       </h2>
 
       <ResponsiveContainer width="100%" height={300}>
         <BarChart data={data}>
-          <XAxis dataKey="time" />
-          <YAxis />
-          <Tooltip />
-          <Bar dataKey="critical" stackId="a" fill="#F62440" />
-          <Bar dataKey="medium" stackId="a" fill="#facc15" />
-          <Bar dataKey="good" stackId="a" fill="#22c55e" />
+          <XAxis 
+            dataKey="time" 
+            tick={{ fill: "var(--foreground)" }} 
+          />
+          <YAxis 
+            tick={{ fill: "var(--foreground)" }} 
+          />
+          <Tooltip 
+            cursor={{ fill: 'transparent' }}
+            contentStyle={{
+              backgroundColor: "var(--card-bg)",
+              borderColor: "var(--border-color)",
+              borderRadius: "10px",
+              color: "var(--foreground)",
+            }}
+          />
+          {/* Map to CSS Variables instead of Hex codes */}
+          <Bar dataKey="critical" stackId="a" fill="var(--color-critical)" />
+          <Bar dataKey="medium" stackId="a" fill="var(--color-medium)" />
+          <Bar dataKey="good" stackId="a" fill="var(--color-healthy)" />
         </BarChart>
       </ResponsiveContainer>
     </div>

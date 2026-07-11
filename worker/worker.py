@@ -1,7 +1,13 @@
 import json
 import psycopg2
 import os
-# ✅ Fix Python pathimport time
+import time
+import sys
+import boto3
+import redis
+from datetime import datetime
+
+# ✅ Fix Python path
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
 
 from services.audit import build_audit_report
@@ -105,7 +111,7 @@ def save_audit_report(conn, task, report):
 
 
 # =========================
-# ✅ Task processing (OBSERVABILITY ADDED)
+# ✅ Task processing
 # =========================
 def process_task(task, conn=None):
     if task.get("action") != "start_audit":
@@ -124,19 +130,15 @@ def process_task(task, conn=None):
         print(f"[TASK RECEIVED] {task}")
         print(f"[AUDIT START] user={task['user_id']} mode={mode}")
 
-        # ✅ Run audit
         report = build_audit_report(task, aws_clients, mode=mode)
 
         findings = report.get("findings", []) if isinstance(report, dict) else []
-
         print(f"[FINDINGS] count={len(findings)}")
 
-        # ✅ Save report
         report_id = save_audit_report(conn, task, report)
 
         duration = time.time() - start_time
 
-        # ✅ Metrics log
         metrics = {
             "timestamp": datetime.utcnow().isoformat(),
             "user_id": task["user_id"],
@@ -168,7 +170,6 @@ def process_task(task, conn=None):
 # =========================
 def run_worker():
     client = get_redis_client()
-
     print("🚀 Worker started, listening for audit_tasks...")
 
     while True:
@@ -201,8 +202,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-import sys
-import boto3
-import redis
-from datetime import datetime
-

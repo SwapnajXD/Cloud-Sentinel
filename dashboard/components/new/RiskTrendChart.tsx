@@ -30,19 +30,27 @@ export default function RiskTrendChart({ reports }: any) {
     .reverse();
 
   return (
-    <div className="bg-[#FFF2DB] p-6 rounded-xl shadow">
+    <div className="bg-cardBg border border-brandBorder backdrop-blur-sm p-6 rounded-xl shadow hover:shadow-xl hover:-translate-y-1 transition-all duration-200">
       <h2 className="text-lg font-semibold mb-4">📉 Risk Over Time</h2>
 
       <ResponsiveContainer width="100%" height={250}>
         <LineChart data={data}>
           <XAxis dataKey="time" />
           <YAxis />
-          <Tooltip />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: "var(--card-bg)",
+              borderColor: "var(--border-color)",
+              borderRadius: "10px",
+              color: "var(--foreground)",
+            }}
+          />
           <Line
             type="monotone"
             dataKey="risk"
             stroke="#F62440"
             strokeWidth={3}
+            dot={{ r: 4 }}
           />
         </LineChart>
       </ResponsiveContainer>

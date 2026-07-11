@@ -33,7 +33,7 @@ export default function SeverityChart({ reports }: any) {
   ];
 
   return (
-    <div className="bg-[#FFF2DB] p-6 rounded-xl shadow">
+    <div className="bg-cardBg border border-brandBorder backdrop-blur-sm p-6 rounded-xl shadow hover:shadow-xl hover:-translate-y-1 transition-all duration-200">
       <h2 className="text-lg font-semibold mb-4">
         📊 Severity Distribution
       </h2>
@@ -50,7 +50,14 @@ export default function SeverityChart({ reports }: any) {
               <Cell key={`cell-${index}`} fill={entry.color} />
             ))}
           </Pie>
-          <Tooltip />
+          <Tooltip
+            contentStyle={{
+              backgroundColor: "var(--card-bg)",
+              borderColor: "var(--border-color)",
+              borderRadius: "10px",
+              color: "var(--foreground)",
+            }}
+          />
         </PieChart>
       </ResponsiveContainer>
     </div>

@@ -1,14 +1,15 @@
 // ==============================
-// ✅ Base URL
+// ✅ Base URL Config & Verification
 // ==============================
+const BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL || "";
 
-const BASE_URL = process.env.NEXT_PUBLIC_BACKEND_URL!;
-
+if (!BASE_URL && typeof window !== "undefined") {
+  console.warn("⚠️ Warning: NEXT_PUBLIC_BACKEND_URL environment variable is missing.");
+}
 
 // ==============================
 // ✅ Core API request helper
 // ==============================
-
 export async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {},
@@ -23,28 +24,28 @@ export async function apiRequest<T>(
     },
   });
 
-  // ✅ FIXED: Proper error handling
-  if (!res.ok) {
-    const text = await res.text();
-    console.error("API ERROR:", endpoint, text);
-    throw new Error(text || `Request failed: ${endpoint}`);
-  }
-
-  // ✅ Parse response safely
+  // ✅ Read text stream once to handle both error strings and valid data streams safely
   const text = await res.text();
 
+  if (!res.ok) {
+    console.error("API ERROR:", endpoint, text);
+    throw new Error(text || `Request failed: ${endpoint} (Status: ${res.status})`);
+  }
+
   if (!text.trim()) {
-    throw new Error(`Empty response from ${endpoint}`);
+    // If it's a 204 No Content or successful delete, don't crash on JSON parsing
+    if (res.status === 204 || options.method === "DELETE") {
+      return { status: "success" } as unknown as T;
+    }
+    throw new Error(`Empty response payload from ${endpoint}`);
   }
 
   return JSON.parse(text);
 }
 
-
 // ==============================
 // ✅ Types
 // ==============================
-
 export type ReportsResponse = {
   reports: any[];
   count: number;
@@ -52,6 +53,7 @@ export type ReportsResponse = {
 
 export type AuthResponse = {
   token: string;
+  message?: string;
 };
 
 export type ActionResponse = {
@@ -60,58 +62,34 @@ export type ActionResponse = {
   error?: string;
 };
 
-
 // ==============================
 // ✅ API Helpers
 // ==============================
 
-// 🔐 Login
+// 🔐 Login (Refactored to safely use unified apiRequest)
 export async function login(email: string, password: string) {
-  const res = await fetch(`${BASE_URL}/api/login`, {
+  return apiRequest<AuthResponse>("/api/login", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
     body: JSON.stringify({ email, password }),
   });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || "Login failed");
-  }
-
-  return res.json();
 }
 
-
-// 🆕 Register
+// 🆕 Register (Refactored to safely use unified apiRequest)
 export async function register(email: string, password: string) {
-  const res = await fetch(`${BASE_URL}/api/register`, {
+  return apiRequest<AuthResponse>("/api/register", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
     body: JSON.stringify({ email, password }),
   });
-
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || "Registration failed");
-  }
-
-  return res.json();
 }
-
 
 // 📊 Fetch reports
 export function getReports(token: string) {
   return apiRequest<ReportsResponse>(
     "/api/reports",
-    {},
+    { method: "GET" },
     token
   );
 }
-
 
 // 🚀 Queue audit
 export function queueAudit(
@@ -131,7 +109,6 @@ export function queueAudit(
     token
   );
 }
-
 
 // ❌ Delete account
 export function deleteAccount(token: string, password: string) {

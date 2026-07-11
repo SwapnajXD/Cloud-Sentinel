@@ -29,7 +29,7 @@ export default function TrendChart({ reports }: any) {
     .reverse();
 
   return (
-    <div className="bg-[#FFF2DB] p-6 rounded-xl shadow">
+    <div className="bg-cardBg border border-brandBorder backdrop-blur-sm p-6 rounded-xl shadow hover:shadow-xl hover:-translate-y-1 transition-all duration-200">
       <h2 className="text-lg font-semibold mb-4">
         📈 Critical Issues Over Time
       </h2>
@@ -40,8 +40,10 @@ export default function TrendChart({ reports }: any) {
           <YAxis allowDecimals={false} />
           <Tooltip
             contentStyle={{
-              backgroundColor: "#FFF2DB",
+              backgroundColor: "var(--card-bg)",
+              borderColor: "var(--border-color)",
               borderRadius: "10px",
+              color: "var(--foreground)",
             }}
           />
           <Line

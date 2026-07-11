@@ -1,3 +1,72 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+:root {
+  /* Light Mode: Clean, Professional, High Readability */
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --card-bg: #ffffff;
+  --border-color: #e2e8f0;
+  
+  --color-critical: #e11d48;    /* Rose 600 - High alert */
+  --color-medium: #d97706;      /* Amber 600 - Warning */
+  --color-healthy: #059669;     /* Emerald 600 - Reliable */
+  --color-info: #0284c7;        /* Sky 600 - Neutral */
+}
+
+.dark {
+  /* Gruvbox Dark Mode: Warm, Low Eye-Strain */
+  --background: #1d2021;
+  --foreground: #ebdbb2;
+  --card-bg: #282828;
+  --border-color: #3c3836;
+  
+  --color-critical: #cc241d;    /* Gruvbox Red */
+  --color-medium: #d79921;      /* Gruvbox Yellow */
+  --color-healthy: #98971a;     /* Gruvbox Green */
+  --color-info: #458588;        /* Gruvbox Aqua */
+}
+
+@layer base {
+  html, body {
+    background-color: var(--background);
+    color: var(--foreground);
+    /* Clean sans-serif by default for a premium app feel */
+    font-family: var(--font-sans), sans-serif;
+    scroll-behavior: smooth;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+  }
+
+  /* Utility classes to easily call your custom artistic header font */
+  .font-artistic {
+    font-family: var(--font-artistic);
+    font-weight: 800; /* Extra bold gives Syne its artistic, wide stretch */
+    letter-spacing: -0.02em;
+  }
+  
+  /* Apply artistic styling globally to headers if desired */
+  h1, h2, h3, .site-logo {
+    font-family: var(--font-artistic);
+    font-weight: 800;
+  }
+
+  /* Force logs, tables, and code to use the sharp monospace font */
+  code, pre, .audit-log, .table-data {
+    font-family: var(--font-mono), monospace;
+  }
+
+  /* Recharts Tooltip styling update */
+  .recharts-default-tooltip {
+    background-color: var(--card-bg) !important;
+    border-color: var(--border-color) !important;
+    color: var(--foreground) !important;
+    font-family: var(--font-sans), sans-serif;
+    border-radius: 8px !important;
+    box-shadow: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1) !important;
+    backdrop-filter: blur(4px);
+    transition: background-color 0.3s ease, border-color 0.3s ease;
+  }
+}

@@ -11,7 +11,7 @@ export type ReportRow = {
 export type ScanSummary = {
   scope: string;
   riskScore: number;
-  riskLabel: string;
+  riskLabel: "Critical" | "Elevated" | "Controlled";
   unencryptedBuckets: string[];
   runningInstances: string[];
   mfaEnabled: boolean;
@@ -104,6 +104,7 @@ export function summarizeReport(reportRow: ReportRow): ScanSummary {
     (mfaEnabled ? 0 : 1) +
     (runningInstances.length > 0 ? 1 : 0);
 
+  // Calculates baseline + risk weights up to a 100 max boundary ceiling
   const riskScore = clamp(
     18 +
       unencryptedBuckets.length * 20 +
