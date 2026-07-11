@@ -9,6 +9,7 @@
     "build": "tsc",
     "dev": "nodemon --exec ts-node server.ts",
     "dev:build": "tsc --watch",
+    "pretest": "node -e \"const fs=require('fs');const p='../node_modules';if(!fs.existsSync(p))fs.symlinkSync('gateway/node_modules','../node_modules','dir')\"",
     "test": "jest --runInBand"
   },
   "engines": {
@@ -48,9 +49,13 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
+    "roots": ["<rootDir>/../tests"],
     "testMatch": [
-      "**/tests/**/*.test.ts"
+      "**/*.test.ts"
     ],
+    "setupFiles": ["<rootDir>/../tests/jest.setup.ts"],
+    "moduleDirectories": ["node_modules"],
+    "modulePaths": ["<rootDir>/node_modules"],
     "moduleFileExtensions": [
       "ts",
       "js",

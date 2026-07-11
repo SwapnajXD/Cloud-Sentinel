@@ -1,4 +1,4 @@
-import { signToken, authenticateJWT, TokenPayload } from '../lib/auth';
+import { signToken, authenticateJWT, TokenPayload } from '../gateway/src/lib/auth';
 import { Request, Response, NextFunction } from 'express';
 
 describe('auth helpers', () => {

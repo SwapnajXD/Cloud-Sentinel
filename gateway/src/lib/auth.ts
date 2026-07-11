@@ -1,7 +1,19 @@
 import jwt from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'please-change-this-in-prod';
+// No insecure fallback: fail loudly at startup instead of silently signing
+// tokens with a well-known default secret.
+const rawSecret = process.env.JWT_SECRET;
+
+if (!rawSecret) {
+  throw new Error(
+    'JWT_SECRET is not set. Set a strong, random value in your environment before starting the gateway.'
+  );
+}
+
+// Re-bind to a definitely-string const so TS narrows it correctly in the
+// functions below (module-level `if` checks don't narrow across closures).
+const JWT_SECRET: string = rawSecret;
 
 interface TokenPayload {
   id: number;

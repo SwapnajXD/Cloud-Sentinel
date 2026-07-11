@@ -26,9 +26,23 @@ app.set('trust proxy', 1);
 app.use(helmet());
 app.use(express.json());
 app.use(morgan('combined'));
+// Allow a comma-separated list of origins via ALLOWED_ORIGIN (e.g.
+// "http://localhost:3001,https://app.example.com"). Falls back to permissive
+// CORS only outside production, so a missing env var can't silently open
+// things up in prod.
+const allowedOrigins = (process.env.ALLOWED_ORIGIN || '')
+  .split(',')
+  .map((o) => o.trim())
+  .filter(Boolean);
+
 app.use(
   cors({
-    origin: true, // ✅ allow ALL origins in dev
+    origin:
+      allowedOrigins.length > 0
+        ? allowedOrigins
+        : process.env.NODE_ENV === 'production'
+        ? false // no ALLOWED_ORIGIN configured in prod -> block cross-origin by default
+        : true, // permissive only for local dev
     credentials: true,
   })
 );
@@ -40,6 +54,16 @@ const limiter = rateLimit({
   legacyHeaders: false,
 });
 app.use('/api', limiter);
+
+// Tighter limiter specifically for auth endpoints to slow down credential
+// stuffing / brute force attempts.
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'too many attempts, try again later' },
+});
 
 // Postgres
 const pool: Pool = new Pool({
@@ -133,14 +157,19 @@ async function findUserByEmail(email: string): Promise<UserFromDb | undefined> {
 
 // ROUTES
 
-app.post('/api/register', async (req: Request, res: Response) => {
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+app.post('/api/register', authLimiter, async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
 
     if (!email || !password) {
       return res.status(400).json({ error: 'email and password required' });
     }
-    if (password.length < 8) {
+    if (typeof email !== 'string' || !EMAIL_RE.test(email)) {
+      return res.status(400).json({ error: 'invalid email format' });
+    }
+    if (typeof password !== 'string' || password.length < 8) {
       return res.status(400).json({ error: 'weak password' });
     }
 
@@ -161,7 +190,7 @@ app.post('/api/register', async (req: Request, res: Response) => {
   }
 });
 
-app.post('/api/login', async (req: Request, res: Response) => {
+app.post('/api/login', authLimiter, async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
 
@@ -218,6 +247,36 @@ app.get('/api/reports', authenticateJWT, async (req: Request, res: Response) => 
     res.json({ reports: result.rows });
   } catch {
     res.status(500).json({ error: 'error fetching reports' });
+  }
+});
+
+// Delete account (password-confirmed). Reports are removed automatically via
+// the ON DELETE CASCADE foreign key on audit_reports.user_id.
+app.delete('/api/account', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { password } = req.body;
+
+    if (!password) {
+      return res.status(400).json({ error: 'password required to confirm deletion' });
+    }
+
+    const dbUser = await findUserByEmail(user.email);
+    if (!dbUser) {
+      return res.status(404).json({ error: 'account not found' });
+    }
+
+    const ok = await bcrypt.compare(password, dbUser.password);
+    if (!ok) {
+      return res.status(401).json({ error: 'invalid credentials' });
+    }
+
+    await pool.query('DELETE FROM users WHERE id = $1', [user.id]);
+
+    res.json({ status: 'success' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'account deletion failed' });
   }
 });
 

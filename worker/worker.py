@@ -5,7 +5,7 @@ import time
 import sys
 import boto3
 import redis
-from datetime import datetime
+from datetime import datetime, timezone
 
 # ✅ Fix Python path
 sys.path.append(os.path.abspath(os.path.dirname(__file__)))
@@ -113,12 +113,12 @@ def save_audit_report(conn, task, report):
 # =========================
 # ✅ Task processing
 # =========================
-def process_task(task, conn=None):
+def process_task(task, conn=None, aws_clients=None):
     if task.get("action") != "start_audit":
         return {"status": "ignored"}
 
     mode = task.get("mode", "aws")
-    aws_clients = get_aws_clients(mode)
+    aws_clients = aws_clients or get_aws_clients(mode)
 
     should_close = conn is None
     conn = conn or get_db_connection()
@@ -140,7 +140,7 @@ def process_task(task, conn=None):
         duration = time.time() - start_time
 
         metrics = {
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "user_id": task["user_id"],
             "mode": mode,
             "report_id": report_id,
@@ -165,6 +165,13 @@ def process_task(task, conn=None):
             conn.close()
 
 
+def parse_task(payload):
+    """Decode a raw Redis payload (bytes or str) into a task dict."""
+    if isinstance(payload, bytes):
+        payload = payload.decode("utf-8")
+    return json.loads(payload)
+
+
 # =========================
 # ✅ Worker loop
 # =========================
@@ -180,7 +187,7 @@ def run_worker():
                 continue
 
             _, payload = item
-            task = json.loads(payload.decode("utf-8"))
+            task = parse_task(payload)
 
             result = process_task(task)
             print("[RESULT]", result)

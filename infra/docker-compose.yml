@@ -22,8 +22,10 @@ services:
     image: cloud-sentinel-gateway:latest
     environment:
       - NODE_ENV=production
-      - DATABASE_URL=postgres://postgres:postgres@db:5432/cloud_sentinel
+      - DATABASE_URL=postgres://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/cloud_sentinel
       - REDIS_URL=redis://redis:6379
+      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in infra/.env - see .env.example}
+      - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-}
     ports:
       - "3000:3000"
     depends_on:
@@ -44,8 +46,9 @@ services:
       - ../.aws.env
     environment:
       - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgres://postgres:postgres@db:5432/cloud_sentinel
-      - FLOCI_ENDPOINT=http://100.117.35.70:4566
+      - DATABASE_URL=postgres://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/cloud_sentinel
+      # Set in infra/.env - do not hardcode a real host/IP here, this file gets committed.
+      - FLOCI_ENDPOINT=${FLOCI_ENDPOINT:-}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     depends_on:
@@ -72,7 +75,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
       POSTGRES_DB: cloud_sentinel
     volumes:
       - pgdata:/var/lib/postgresql/data
