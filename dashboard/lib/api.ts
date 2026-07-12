@@ -29,6 +29,14 @@ export async function apiRequest<T>(
 
   if (!res.ok) {
     console.error("API ERROR:", endpoint, text);
+
+    if (res.status === 401 && typeof window !== "undefined") {
+      // Token missing/expired/invalid - let AuthProvider know so it can
+      // clear the stale session and send the user back to /login instead
+      // of every subsequent request just silently failing with a 401.
+      window.dispatchEvent(new Event("sentinel:session-expired"));
+    }
+
     throw new Error(text || `Request failed: ${endpoint} (Status: ${res.status})`);
   }
 

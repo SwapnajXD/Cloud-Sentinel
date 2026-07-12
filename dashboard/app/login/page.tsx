@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import AuthCard from "@/components/auth/AuthCard";
@@ -9,10 +9,18 @@ import RadarSweep from "@/components/sentinel/RadarSweep";
 export default function LoginPage() {
   const { token, ready } = useAuth();
   const router = useRouter();
+  const [expiredNotice, setExpiredNotice] = useState(false);
 
   useEffect(() => {
     if (ready && token) router.replace("/");
   }, [ready, token, router]);
+
+  useEffect(() => {
+    if (sessionStorage.getItem("sentinel:signed-out-reason") === "expired") {
+      setExpiredNotice(true);
+      sessionStorage.removeItem("sentinel:signed-out-reason");
+    }
+  }, []);
 
   return (
     <main className="min-h-screen flex items-center justify-center overflow-hidden relative px-6 py-12">
@@ -42,7 +50,14 @@ export default function LoginPage() {
           </div>
         </div>
 
-        <AuthCard />
+        <div className="flex flex-col gap-4 items-stretch">
+          {expiredNotice && (
+            <div className="rounded-lg border border-medium/30 bg-medium/10 text-medium text-sm px-4 py-3 max-w-sm">
+              Your session expired. Sign in again to continue.
+            </div>
+          )}
+          <AuthCard />
+        </div>
       </div>
     </main>
   );

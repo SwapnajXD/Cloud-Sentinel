@@ -17,7 +17,7 @@ type AuthContextValue = {
   ready: boolean;
   signIn: (email: string, password: string) => Promise<void>;
   signUp: (email: string, password: string) => Promise<void>;
-  signOut: () => void;
+  signOut: (opts?: { reason?: "expired" }) => void;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -49,12 +49,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await signIn(email, password);
   }, [signIn]);
 
-  const signOut = useCallback(() => {
+  const signOut = useCallback((opts?: { reason?: "expired" }) => {
     localStorage.removeItem("token");
     localStorage.removeItem("email");
     setToken(null);
     setEmail(null);
+    if (opts?.reason === "expired" && typeof window !== "undefined") {
+      sessionStorage.setItem("sentinel:signed-out-reason", "expired");
+    }
   }, []);
+
+  useEffect(() => {
+    function handleExpired() {
+      signOut({ reason: "expired" });
+    }
+    window.addEventListener("sentinel:session-expired", handleExpired);
+    return () => window.removeEventListener("sentinel:session-expired", handleExpired);
+  }, [signOut]);
 
   return (
     <AuthContext.Provider value={{ token, email, ready, signIn, signUp, signOut }}>
