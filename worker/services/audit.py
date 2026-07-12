@@ -75,12 +75,15 @@ def build_audit_report(task, aws_clients, mode="aws"):
     # ✅ Security Groups
     # =========================
     for f in check_open_security_groups(aws_clients["ec2"]):
+        # ec2.py already computed a specific title/description for this
+        # exact port/service exposure - don't stomp it with one generic
+        # message for every rule regardless of what's actually open.
+        f.setdefault("title", "Open security group rule")
+        f.setdefault("description", f.get("details"))
         f.update({
             "category": "EC2",
-            "title": "Open Security Group",
-            "description": "Security group allows open inbound access.",
-            "impact": "Exposes services to the internet.",
-            "remediation": "Restrict access to specific IP ranges.",
+            "impact": "The exposed port(s) may allow unauthorized access if the running service is vulnerable, unpatched, or misconfigured.",
+            "remediation": "Restrict the rule to specific trusted IP ranges (e.g. your office or VPN CIDR) instead of 0.0.0.0/0, or remove it if not required.",
         })
         findings.append(f)
 
@@ -186,7 +189,7 @@ def build_audit_report(task, aws_clients, mode="aws"):
     # ✅ SORT BY SEVERITY
     # =========================
     findings.sort(
-        key=lambda f: {"critical": 0, "medium": 1, "good": 2, "info": 3}.get(f["severity"], 4)
+        key=lambda f: {"critical": 0, "medium": 1, "low": 2, "good": 3, "info": 4}.get(f["severity"], 5)
     )
 
     # =========================
@@ -196,6 +199,7 @@ def build_audit_report(task, aws_clients, mode="aws"):
         "total": len(findings),
         "critical": sum(1 for f in findings if f["severity"] == "critical"),
         "medium": sum(1 for f in findings if f["severity"] == "medium"),
+        "low": sum(1 for f in findings if f["severity"] == "low"),
         "good": sum(1 for f in findings if f["severity"] == "good"),
     }
 

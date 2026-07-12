@@ -261,6 +261,126 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(by_id["encrypted-db"]["encrypted"])
         self.assertFalse(by_id["plain-db"]["encrypted"])
 
+    def test_open_security_group_flags_ssh_as_critical(self):
+        from scans.ec2 import check_open_security_groups
+
+        ec2 = Mock()
+        ec2.describe_security_groups.return_value = {
+            "SecurityGroups": [{
+                "GroupId": "sg-ssh",
+                "IpPermissions": [{
+                    "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22,
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                }],
+            }]
+        }
+
+        findings = check_open_security_groups(ec2)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["severity"], "critical")
+        self.assertIn("SSH", findings[0]["title"])
+
+    def test_open_security_group_flags_web_port_as_low(self):
+        from scans.ec2 import check_open_security_groups
+
+        ec2 = Mock()
+        ec2.describe_security_groups.return_value = {
+            "SecurityGroups": [{
+                "GroupId": "sg-web",
+                "IpPermissions": [{
+                    "IpProtocol": "tcp", "FromPort": 443, "ToPort": 443,
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                }],
+            }]
+        }
+
+        findings = check_open_security_groups(ec2)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["severity"], "low")
+
+    def test_open_security_group_flags_all_ports_as_critical(self):
+        from scans.ec2 import check_open_security_groups
+
+        ec2 = Mock()
+        ec2.describe_security_groups.return_value = {
+            "SecurityGroups": [{
+                "GroupId": "sg-allports",
+                "IpPermissions": [{
+                    "IpProtocol": "-1",
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                }],
+            }]
+        }
+
+        findings = check_open_security_groups(ec2)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["severity"], "critical")
+        self.assertIn("All ports", findings[0]["title"])
+
+    def test_open_security_group_flags_wide_range_as_medium(self):
+        from scans.ec2 import check_open_security_groups
+
+        ec2 = Mock()
+        ec2.describe_security_groups.return_value = {
+            "SecurityGroups": [{
+                "GroupId": "sg-wide",
+                "IpPermissions": [{
+                    # A wide range with no named risky/web port inside it,
+                    # so this should hit the "wide range" branch, not
+                    # "sensitive service exposed".
+                    "IpProtocol": "tcp", "FromPort": 50000, "ToPort": 60000,
+                    "IpRanges": [{"CidrIp": "0.0.0.0/0"}],
+                }],
+            }]
+        }
+
+        findings = check_open_security_groups(ec2)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["severity"], "medium")
+        self.assertIn("Wide port range", findings[0]["title"])
+
+    def test_open_security_group_ignores_rules_not_open_to_world(self):
+        from scans.ec2 import check_open_security_groups
+
+        ec2 = Mock()
+        ec2.describe_security_groups.return_value = {
+            "SecurityGroups": [{
+                "GroupId": "sg-private",
+                "IpPermissions": [{
+                    "IpProtocol": "tcp", "FromPort": 22, "ToPort": 22,
+                    "IpRanges": [{"CidrIp": "10.0.0.0/8"}],
+                }],
+            }]
+        }
+
+        findings = check_open_security_groups(ec2)
+
+        self.assertEqual(findings, [])
+
+    def test_open_security_group_detects_ipv6_world_exposure(self):
+        from scans.ec2 import check_open_security_groups
+
+        ec2 = Mock()
+        ec2.describe_security_groups.return_value = {
+            "SecurityGroups": [{
+                "GroupId": "sg-v6",
+                "IpPermissions": [{
+                    "IpProtocol": "tcp", "FromPort": 3389, "ToPort": 3389,
+                    "Ipv6Ranges": [{"CidrIpv6": "::/0"}],
+                }],
+            }]
+        }
+
+        findings = check_open_security_groups(ec2)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["severity"], "critical")
+        self.assertIn("::/0", findings[0]["details"])
+
     def test_parse_task_accepts_bytes_payload(self):
         payload = json.dumps({"action": "start_audit", "user_id": 1}).encode("utf-8")
         task = worker.parse_task(payload)
