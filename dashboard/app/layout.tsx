@@ -1,12 +1,12 @@
 import type { Metadata } from "next";
-import { Syne, Inter, JetBrains_Mono } from "next/font/google";
+import { Space_Grotesk, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { AuthProvider } from "@/lib/auth-context";
 
-// 1. Initialize the Google Fonts matching your CSS variables perfectly
-const syne = Syne({
-  weight: ["800"], // Force extra bold to trigger Syne's graphic stretch
+const spaceGrotesk = Space_Grotesk({
+  weight: ["500", "700"],
   subsets: ["latin"],
-  variable: "--font-artistic",
+  variable: "--font-display",
   display: "swap",
 });
 
@@ -23,8 +23,8 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Cloud Sentinel - Security Control Plane",
-  description: "Enterprise Cloud Security Posture Management Dashboard",
+  title: "Cloud-Sentinel",
+  description: "Standing watch over your AWS perimeter.",
 };
 
 export default function RootLayout({
@@ -33,13 +33,12 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    // 2. Inject all three variables into the HTML class list so your CSS can access them
-    <html 
-      lang="en" 
-      className={`${syne.variable} ${inter.variable} ${jetbrainsMono.variable}`}
+    <html
+      lang="en"
+      className={`${spaceGrotesk.variable} ${inter.variable} ${jetbrainsMono.variable} dark`}
     >
-      <body className="antialiased">
-        {children}
+      <body className="antialiased bg-ink text-mist">
+        <AuthProvider>{children}</AuthProvider>
       </body>
     </html>
   );

@@ -48,7 +48,7 @@ export async function apiRequest<T>(
 // ==============================
 export type ReportsResponse = {
   reports: any[];
-  count: number;
+  count?: number;
 };
 
 export type AuthResponse = {
