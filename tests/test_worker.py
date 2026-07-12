@@ -125,6 +125,34 @@ class WorkerTests(unittest.TestCase):
         result = worker.process_task({"action": "noop"})
         self.assertEqual(result["status"], "ignored")
 
+    def test_process_task_catches_aws_client_construction_failure(self):
+        """Regression test: get_aws_clients() (e.g. a missing FLOCI_ENDPOINT)
+        used to be called before the try block, so it escaped process_task
+        entirely and crashed the whole worker loop instead of failing just
+        this one task. It must come back as a normal {"status": "error"}."""
+        task = {"action": "start_audit", "user_id": 12, "mode": "floci"}
+        conn = FakeConnection()
+
+        with patch.object(worker, "get_aws_clients", side_effect=ValueError("FLOCI_ENDPOINT not set")):
+            result = worker.process_task(task, conn=conn)
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("FLOCI_ENDPOINT", result["error"])
+        # Caller-supplied connection must still not be closed by process_task.
+        self.assertFalse(conn.closed)
+
+    def test_process_task_catches_db_connection_failure_without_crashing(self):
+        """Same failure mode, but for get_db_connection() when no conn is
+        supplied - must not raise AttributeError trying to close a None."""
+        task = {"action": "start_audit", "user_id": 13}
+
+        with patch.object(worker, "get_aws_clients", return_value=_fake_aws_clients()), \
+             patch.object(worker, "get_db_connection", side_effect=OSError("could not connect to db")):
+            result = worker.process_task(task)  # conn=None, should_close=True
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("could not connect", result["error"])
+
     def test_process_task_reports_errors_without_raising(self):
         task = {"action": "start_audit", "user_id": 11}
         conn = FakeConnection()

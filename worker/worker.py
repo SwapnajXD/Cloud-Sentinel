@@ -154,10 +154,7 @@ def process_task(task, conn=None, aws_clients=None):
 
     mode = task.get("mode", "aws")
     task_id = task.get("task_id")
-    aws_clients = aws_clients or get_aws_clients(mode)
-
     should_close = conn is None
-    conn = conn or get_db_connection()
 
     start_time = time.time()
 
@@ -165,6 +162,12 @@ def process_task(task, conn=None, aws_clients=None):
         print("=" * 60)
         print(f"[TASK RECEIVED] {task}")
         print(f"[AUDIT START] user={task['user_id']} mode={mode}")
+
+        # Built inside the try: a misconfigured FLOCI_ENDPOINT or an
+        # unreachable DB should fail *this task* (and go through the normal
+        # retry/dead-letter path below), not crash the whole worker loop.
+        aws_clients = aws_clients or get_aws_clients(mode)
+        conn = conn or get_db_connection()
 
         ensure_schema(conn)
         update_task_status(conn, task_id, "running")
@@ -201,7 +204,7 @@ def process_task(task, conn=None, aws_clients=None):
         return {"status": "error", "error": str(e)}
 
     finally:
-        if should_close:
+        if should_close and conn is not None:
             conn.close()
 
 
