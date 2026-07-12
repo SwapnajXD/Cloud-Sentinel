@@ -54,6 +54,7 @@ def _fake_aws_clients():
         "ec2": SimpleNamespace(),
         "iam": SimpleNamespace(),
         "sts": SimpleNamespace(),
+        "rds": SimpleNamespace(),
     }
 
 
@@ -380,6 +381,48 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(len(findings), 1)
         self.assertEqual(findings[0]["severity"], "critical")
         self.assertIn("::/0", findings[0]["details"])
+
+    def test_good_findings_use_pass_wording_not_fail_wording(self):
+        """Regression test: several checks return both pass ("good") and
+        fail ("critical") outcomes, but audit.py used to hardcode
+        fail-oriented title/description/remediation regardless of which
+        actually happened - e.g. a passing root-MFA check would still say
+        "Root account without MFA is highly dangerous". Every "good"
+        finding must actually describe a pass, not a failure."""
+        task = {"action": "start_audit", "user_id": 5}
+
+        with patch.object(audit, "list_unencrypted_s3_buckets", return_value=[
+            {"bucket": "safe-bucket", "encrypted": True, "details": "AES256"}
+        ]), patch.object(audit, "check_public_s3_buckets", return_value=[]), \
+             patch.object(audit, "list_running_ec2_instances", return_value=[]), \
+             patch.object(audit, "check_open_security_groups", return_value=[]), \
+             patch.object(
+                 audit, "check_mfa_for_current_user",
+                 return_value={"enabled": True, "status": "enabled", "user_name": "alice"},
+             ), patch.object(
+                 audit, "check_root_mfa_enabled",
+                 return_value=[{"type": "RootMFA", "resource": "123456789012", "severity": "good", "details": "Root MFA enabled"}],
+             ), patch.object(
+                 audit, "list_public_rds_instances", return_value=[]
+             ), patch.object(
+                 audit, "list_unencrypted_rds_instances",
+                 return_value=[{"instance": "safe-db", "encrypted": True, "engine": "postgres"}],
+             ):
+            report = audit.build_audit_report(task, _fake_aws_clients(), mode="aws")
+
+        good_findings = [f for f in report["findings"] if f["severity"] == "good"]
+        self.assertEqual(len(good_findings), 4)  # s3, rds, user mfa, root mfa
+
+        for f in good_findings:
+            combined_text = " ".join([
+                f.get("title", ""), f.get("description", ""),
+                f.get("impact", ""), f.get("remediation", ""),
+            ]).lower()
+            for bad_phrase in ["not enabled", "disabled", "dangerous", "does not have", "immediately"]:
+                self.assertNotIn(
+                    bad_phrase, combined_text,
+                    f"'good' finding {f['type']} still uses fail-oriented wording: {combined_text}",
+                )
 
     def test_parse_task_accepts_bytes_payload(self):
         payload = json.dumps({"action": "start_audit", "user_id": 1}).encode("utf-8")

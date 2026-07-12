@@ -30,15 +30,28 @@ def build_audit_report(task, aws_clients, mode="aws"):
     # ✅ S3 Encryption
     # =========================
     for bucket in list_unencrypted_s3_buckets(aws_clients["s3"]):
+        passed = bucket["encrypted"]
         findings.append({
             "type": "S3Encryption",
             "category": "S3",
-            "severity": "critical" if not bucket["encrypted"] else "good",
+            "severity": "good" if passed else "critical",
             "resource": bucket["bucket"],
-            "title": "S3 bucket encryption disabled",
-            "description": "This S3 bucket does not have server-side encryption enabled.",
-            "impact": "Sensitive data may be exposed if access is compromised.",
-            "remediation": "Enable default encryption using AES256 or AWS KMS.",
+            "title": "S3 bucket encryption enabled" if passed else "S3 bucket encryption disabled",
+            "description": (
+                "This S3 bucket has server-side encryption enabled."
+                if passed else
+                "This S3 bucket does not have server-side encryption enabled."
+            ),
+            "impact": (
+                "Data at rest is protected even if the underlying storage is compromised."
+                if passed else
+                "Sensitive data may be exposed if access is compromised."
+            ),
+            "remediation": (
+                "No action needed."
+                if passed else
+                "Enable default encryption using AES256 or AWS KMS."
+            ),
             "details": bucket["details"],
         })
 
@@ -97,15 +110,24 @@ def build_audit_report(task, aws_clients, mode="aws"):
     except Exception:
         mfa = {"enabled": False, "status": "unknown"}
 
+    mfa_ok = mfa["enabled"]
     findings.append({
         "type": "IAMMFA",
         "category": "IAM",
-        "severity": "critical" if not mfa["enabled"] else "good",
+        "severity": "good" if mfa_ok else "critical",
         "resource": mfa.get("user_name", "N/A"),
-        "title": "MFA not enabled",
-        "description": "Multi-factor authentication is not enabled for this IAM user.",
-        "impact": "High risk of account compromise using stolen credentials.",
-        "remediation": "Enable MFA in AWS IAM console.",
+        "title": "MFA enabled" if mfa_ok else "MFA not enabled",
+        "description": (
+            "Multi-factor authentication is enabled for this IAM user."
+            if mfa_ok else
+            "Multi-factor authentication is not enabled for this IAM user."
+        ),
+        "impact": (
+            "This user is protected against credential-only compromise (e.g. a leaked password alone isn't enough)."
+            if mfa_ok else
+            "High risk of account compromise using stolen credentials."
+        ),
+        "remediation": "No action needed." if mfa_ok else "Enable MFA in AWS IAM console.",
         "details": f"MFA Status: {mfa['status']}",
     })
 
@@ -143,15 +165,28 @@ def build_audit_report(task, aws_clients, mode="aws"):
 
     try:
         for db in list_unencrypted_rds_instances(aws_clients["rds"]):
+            passed = db["encrypted"]
             findings.append({
                 "type": "RDSEncryption",
                 "category": "RDS",
-                "severity": "critical" if not db["encrypted"] else "good",
+                "severity": "good" if passed else "critical",
                 "resource": db["instance"],
-                "title": "RDS storage encryption disabled",
-                "description": "This RDS instance does not have storage encryption enabled.",
-                "impact": "Data at rest may be exposed if underlying storage is compromised.",
-                "remediation": "Storage encryption can only be enabled at creation time; recreate the instance from an encrypted snapshot.",
+                "title": "RDS storage encryption enabled" if passed else "RDS storage encryption disabled",
+                "description": (
+                    "This RDS instance has storage encryption enabled."
+                    if passed else
+                    "This RDS instance does not have storage encryption enabled."
+                ),
+                "impact": (
+                    "Data at rest is protected even if the underlying storage is compromised."
+                    if passed else
+                    "Data at rest may be exposed if underlying storage is compromised."
+                ),
+                "remediation": (
+                    "No action needed."
+                    if passed else
+                    "Storage encryption can only be enabled at creation time; recreate the instance from an encrypted snapshot."
+                ),
                 "details": f"Engine: {db['engine']}",
             })
     except Exception:
@@ -164,12 +199,21 @@ def build_audit_report(task, aws_clients, mode="aws"):
         for f in check_root_mfa_enabled(
             aws_clients["iam"], aws_clients["sts"]
         ):
+            passed = f["severity"] == "good"
             f.update({
                 "category": "IAM",
-                "title": "Root account MFA",
-                "description": "Root account MFA verification.",
-                "impact": "Root account without MFA is highly dangerous.",
-                "remediation": "Enable MFA on root account immediately.",
+                "title": "Root account MFA enabled" if passed else "Root account MFA disabled",
+                "description": (
+                    "The AWS account root user has MFA enabled."
+                    if passed else
+                    "The AWS account root user does not have MFA enabled."
+                ),
+                "impact": (
+                    "The root account is protected against credential-only compromise."
+                    if passed else
+                    "Root account without MFA is highly dangerous - it has unrestricted access to the entire account."
+                ),
+                "remediation": "No action needed." if passed else "Enable MFA on the root account immediately.",
             })
             findings.append(f)
     else:
