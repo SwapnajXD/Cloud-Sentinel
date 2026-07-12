@@ -113,10 +113,13 @@ class WorkerTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["report_id"], 55)
-        self.assertEqual(conn.commits, 2)  # ensure_schema() + the insert
+        # ensure_schema() + "running" update + report insert + "done" update
+        self.assertEqual(conn.commits, 4)
         # Caller supplied the connection, so process_task must not close it.
         self.assertFalse(conn.closed)
         self.assertIn("audit_reports", conn.cursor_obj.statements[0])
+        status_updates = [s for s in conn.cursor_obj.statements if "UPDATE audit_tasks" in s]
+        self.assertEqual(len(status_updates), 2)
 
     def test_process_task_ignores_unknown_actions(self):
         result = worker.process_task({"action": "noop"})
@@ -153,6 +156,83 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(result["enabled"])
         self.assertEqual(result["status"], "unavailable")
 
+    def test_check_unused_access_keys_flags_never_used_and_stale_keys(self):
+        from datetime import datetime, timedelta, timezone
+        from scans.iam import check_unused_access_keys
+
+        sts = Mock()
+        sts.get_caller_identity.return_value = {"Arn": "arn:aws:iam::123456789012:user/alice"}
+        iam = Mock()
+        iam.list_access_keys.return_value = {
+            "AccessKeyMetadata": [
+                {"AccessKeyId": "AKIA_NEVER_USED", "Status": "Active"},
+                {"AccessKeyId": "AKIA_STALE", "Status": "Active"},
+                {"AccessKeyId": "AKIA_RECENT", "Status": "Active"},
+            ]
+        }
+
+        def fake_last_used(AccessKeyId):
+            if AccessKeyId == "AKIA_NEVER_USED":
+                return {"AccessKeyLastUsed": {}}
+            if AccessKeyId == "AKIA_STALE":
+                return {"AccessKeyLastUsed": {"LastUsedDate": datetime.now(timezone.utc) - timedelta(days=200)}}
+            return {"AccessKeyLastUsed": {"LastUsedDate": datetime.now(timezone.utc) - timedelta(days=1)}}
+
+        iam.get_access_key_last_used.side_effect = fake_last_used
+
+        findings = check_unused_access_keys(iam, sts)
+        flagged = {f["resource"] for f in findings}
+
+        self.assertIn("AKIA_NEVER_USED", flagged)
+        self.assertIn("AKIA_STALE", flagged)
+        self.assertNotIn("AKIA_RECENT", flagged)
+
+    def test_check_unused_access_keys_skips_non_iam_callers(self):
+        from scans.iam import check_unused_access_keys
+
+        sts = Mock()
+        sts.get_caller_identity.return_value = {"Arn": "arn:aws:sts::123456789012:assumed-role/Foo/session"}
+        iam = Mock()
+
+        findings = check_unused_access_keys(iam, sts)
+
+        self.assertEqual(findings, [])
+        iam.list_access_keys.assert_not_called()
+
+    def test_list_public_rds_instances_flags_publicly_accessible(self):
+        from scans.rds import list_public_rds_instances
+
+        rds = Mock(spec=["describe_db_instances"])  # no get_paginator, exercises non-paginated path
+        rds.describe_db_instances.return_value = {
+            "DBInstances": [
+                {"DBInstanceIdentifier": "public-db", "PubliclyAccessible": True, "Engine": "postgres"},
+                {"DBInstanceIdentifier": "private-db", "PubliclyAccessible": False, "Engine": "postgres"},
+            ]
+        }
+
+        findings = list_public_rds_instances(rds)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["resource"], "public-db")
+        self.assertEqual(findings[0]["severity"], "critical")
+
+    def test_list_unencrypted_rds_instances_reports_encryption_status(self):
+        from scans.rds import list_unencrypted_rds_instances
+
+        rds = Mock(spec=["describe_db_instances"])
+        rds.describe_db_instances.return_value = {
+            "DBInstances": [
+                {"DBInstanceIdentifier": "encrypted-db", "StorageEncrypted": True, "Engine": "mysql"},
+                {"DBInstanceIdentifier": "plain-db", "StorageEncrypted": False, "Engine": "mysql"},
+            ]
+        }
+
+        results = list_unencrypted_rds_instances(rds)
+        by_id = {r["instance"]: r for r in results}
+
+        self.assertTrue(by_id["encrypted-db"]["encrypted"])
+        self.assertFalse(by_id["plain-db"]["encrypted"])
+
     def test_parse_task_accepts_bytes_payload(self):
         payload = json.dumps({"action": "start_audit", "user_id": 1}).encode("utf-8")
         task = worker.parse_task(payload)
@@ -162,6 +242,36 @@ class WorkerTests(unittest.TestCase):
         payload = json.dumps({"action": "start_audit", "user_id": 2})
         task = worker.parse_task(payload)
         self.assertEqual(task["user_id"], 2)
+
+    def test_handle_task_failure_requeues_with_incremented_retry_count(self):
+        fake_client = Mock()
+        task = {"action": "start_audit", "user_id": 3, "task_id": "t-1"}
+
+        with patch.object(worker.time, "sleep"):
+            worker.handle_task_failure(fake_client, task, "boom")
+
+        fake_client.lpush.assert_called_once()
+        queue_name, payload = fake_client.lpush.call_args[0]
+        self.assertEqual(queue_name, "audit_tasks")
+        requeued = json.loads(payload)
+        self.assertEqual(requeued["_retries"], 1)
+
+    def test_handle_task_failure_dead_letters_after_max_retries(self):
+        fake_client = Mock()
+        task = {
+            "action": "start_audit",
+            "user_id": 3,
+            "task_id": None,  # avoid touching the real DB in this test
+            "_retries": worker.MAX_TASK_RETRIES,
+        }
+
+        worker.handle_task_failure(fake_client, task, "still broken")
+
+        fake_client.lpush.assert_called_once()
+        queue_name, payload = fake_client.lpush.call_args[0]
+        self.assertEqual(queue_name, worker.DEAD_LETTER_QUEUE)
+        dead_lettered = json.loads(payload)
+        self.assertEqual(dead_lettered["final_error"], "still broken")
 
 
 if __name__ == "__main__":

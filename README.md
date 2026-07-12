@@ -15,12 +15,16 @@ Cloud-Sentinel demonstrates production-style backend engineering concepts includ
 * Detect security groups open to `0.0.0.0/0`
 * Check IAM user MFA
 * Verify root account MFA
+* Flag unused or stale IAM access keys
 * List running EC2 instances
+* Detect publicly accessible RDS instances
+* Verify RDS storage encryption
 
 ### ⚙️ Backend Architecture
 
 * Distributed worker architecture
-* Redis-based asynchronous job queue
+* Redis-based asynchronous job queue with retry + dead-letter handling
+* Per-task status tracking (queued → running → done/error)
 * JWT authentication
 * PostgreSQL persistence
 * Dockerized deployment
@@ -83,29 +87,40 @@ Authenticate with AWS:
 aws login
 ```
 
+Set up your environment file (required - the gateway won't start without a
+`JWT_SECRET`):
+
+```bash
+cp infra/.env.example infra/.env
+# then edit infra/.env and fill in JWT_SECRET, ALLOWED_ORIGIN, etc.
+```
+
 Start the application:
 
 ```bash
 ./start.sh
 ```
 
-Run the complete test flow:
+Run the tests:
 
 ```bash
-./test-flow.sh
+cd gateway && npm test
+cd ../worker && python -m unittest discover -s ../tests -p "test_worker.py"
 ```
 
 ---
 
 ## 🔌 API
 
-| Method | Endpoint        | Description                  |
-| ------ | --------------- | ---------------------------- |
-| POST   | `/api/register` | Register a new user          |
-| POST   | `/api/login`    | Authenticate and receive JWT |
-| POST   | `/api/audit`    | Queue an AWS audit           |
-| GET    | `/api/reports`  | Retrieve audit reports       |
-| GET    | `/health`       | Health check                 |
+| Method | Endpoint             | Description                  |
+| ------ | --------------------- | ---------------------------- |
+| POST   | `/api/register`       | Register a new user          |
+| POST   | `/api/login`          | Authenticate and receive JWT |
+| POST   | `/api/audit`          | Queue an AWS audit           |
+| GET    | `/api/audit/:task_id` | Check audit task status      |
+| GET    | `/api/reports`        | Retrieve audit reports       |
+| DELETE | `/api/account`        | Delete account (password-confirmed) |
+| GET    | `/health`             | Health check                 |
 
 ---
 
@@ -149,11 +164,24 @@ Detailed documentation is available in the `docs/` directory.
 
 ---
 
+## ⚠️ Known Limitations
+
+* Task retries use a fixed delay (no exponential backoff) and there's no UI
+  for inspecting the `audit_tasks_dead` dead-letter queue yet - that requires
+  manual Redis inspection.
+* `/api/ai/summary` (Gemini-based report summarization) is implemented on the
+  gateway but not yet wired into the dashboard UI.
+* No account lockout after repeated failed logins beyond the 10-req/15-min
+  rate limit on `/api/login`.
+* AWS scan modules cover S3, EC2, IAM, and RDS only; see the roadmap below
+  for planned additions.
+
+---
+
 ## 🚧 Roadmap
 
 Planned enhancements include:
 
-* RDS security audits
 * Lambda security checks
 * Scheduled audits
 * Email notifications

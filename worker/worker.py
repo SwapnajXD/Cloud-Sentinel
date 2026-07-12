@@ -53,6 +53,7 @@ def get_aws_clients(mode="aws"):
             "ec2": session.client("ec2", endpoint_url=FLOCI_ENDPOINT),
             "iam": session.client("iam", endpoint_url=FLOCI_ENDPOINT),
             "sts": session.client("sts", endpoint_url=FLOCI_ENDPOINT),
+            "rds": session.client("rds", endpoint_url=FLOCI_ENDPOINT),
         }
 
     print("[MODE] ☁️ Using REAL AWS")
@@ -62,6 +63,7 @@ def get_aws_clients(mode="aws"):
         "ec2": session.client("ec2"),
         "iam": session.client("iam"),
         "sts": session.client("sts"),
+        "rds": session.client("rds"),
     }
 
 
@@ -86,6 +88,41 @@ def ensure_schema(conn):
             ON audit_reports (user_id, created_at DESC)
             """
         )
+        # Mirrors the table the gateway creates on startup. IF NOT EXISTS
+        # makes this safe regardless of which service starts first.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS audit_tasks (
+                task_id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                status TEXT NOT NULL DEFAULT 'queued',
+                mode TEXT NOT NULL DEFAULT 'aws',
+                report_id INTEGER REFERENCES audit_reports(id) ON DELETE SET NULL,
+                error TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+    conn.commit()
+
+
+def update_task_status(conn, task_id, status, report_id=None, error=None):
+    """Best-effort status update. Older/manually-queued tasks may not have a
+    task_id (e.g. before this field existed) - silently skip those rather
+    than failing the whole audit over a missing tracking row."""
+    if not task_id:
+        return
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE audit_tasks
+            SET status = %s, report_id = COALESCE(%s, report_id), error = %s, updated_at = NOW()
+            WHERE task_id = %s
+            """,
+            (status, report_id, error, task_id),
+        )
     conn.commit()
 
 
@@ -93,8 +130,6 @@ def ensure_schema(conn):
 # ✅ Save report
 # =========================
 def save_audit_report(conn, task, report):
-    ensure_schema(conn)
-
     with conn.cursor() as cursor:
         cursor.execute(
             """
@@ -118,6 +153,7 @@ def process_task(task, conn=None, aws_clients=None):
         return {"status": "ignored"}
 
     mode = task.get("mode", "aws")
+    task_id = task.get("task_id")
     aws_clients = aws_clients or get_aws_clients(mode)
 
     should_close = conn is None
@@ -130,12 +166,16 @@ def process_task(task, conn=None, aws_clients=None):
         print(f"[TASK RECEIVED] {task}")
         print(f"[AUDIT START] user={task['user_id']} mode={mode}")
 
+        ensure_schema(conn)
+        update_task_status(conn, task_id, "running")
+
         report = build_audit_report(task, aws_clients, mode=mode)
 
         findings = report.get("findings", []) if isinstance(report, dict) else []
         print(f"[FINDINGS] count={len(findings)}")
 
         report_id = save_audit_report(conn, task, report)
+        update_task_status(conn, task_id, "done", report_id=report_id)
 
         duration = time.time() - start_time
 
@@ -172,6 +212,40 @@ def parse_task(payload):
     return json.loads(payload)
 
 
+MAX_TASK_RETRIES = int(os.getenv("MAX_TASK_RETRIES", "3"))
+TASK_RETRY_DELAY_SECONDS = int(os.getenv("TASK_RETRY_DELAY_SECONDS", "5"))
+DEAD_LETTER_QUEUE = "audit_tasks_dead"
+
+
+def handle_task_failure(client, task, error_message):
+    """Requeue a failed task with backoff up to MAX_TASK_RETRIES, then move
+    it to a dead-letter list and mark it permanently failed in the DB rather
+    than retrying (or silently dropping it) forever."""
+    retries = task.get("_retries", 0)
+    task_id = task.get("task_id")
+
+    if retries < MAX_TASK_RETRIES:
+        task = {**task, "_retries": retries + 1}
+        print(
+            f"[RETRY] task_id={task_id} attempt={retries + 1}/{MAX_TASK_RETRIES} "
+            f"in {TASK_RETRY_DELAY_SECONDS}s"
+        )
+        time.sleep(TASK_RETRY_DELAY_SECONDS)
+        client.lpush("audit_tasks", json.dumps(task))
+        return
+
+    print(f"[DEAD-LETTER] task_id={task_id} exceeded {MAX_TASK_RETRIES} retries: {error_message}")
+    client.lpush(DEAD_LETTER_QUEUE, json.dumps({**task, "final_error": error_message}))
+
+    if task_id:
+        conn = get_db_connection()
+        try:
+            ensure_schema(conn)
+            update_task_status(conn, task_id, "error", error=error_message)
+        finally:
+            conn.close()
+
+
 # =========================
 # ✅ Worker loop
 # =========================
@@ -191,6 +265,9 @@ def run_worker():
 
             result = process_task(task)
             print("[RESULT]", result)
+
+            if result.get("status") == "error":
+                handle_task_failure(client, task, result.get("error"))
 
         except redis.exceptions.TimeoutError:
             continue

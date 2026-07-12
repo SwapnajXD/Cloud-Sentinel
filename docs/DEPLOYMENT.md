@@ -52,17 +52,25 @@ No AWS credentials are stored in the repository.
 
 The project uses the following environment variables.
 
-| Variable              | Description                             |
-| --------------------- | --------------------------------------- |
-| DATABASE_URL          | PostgreSQL connection string            |
-| REDIS_URL             | Redis connection string                 |
-| JWT_SECRET            | Secret used to sign JWT tokens          |
-| AWS_ACCESS_KEY_ID     | AWS access key (runtime)                |
-| AWS_SECRET_ACCESS_KEY | AWS secret key (runtime)                |
-| AWS_SESSION_TOKEN     | Temporary session token (if applicable) |
-| AWS_REGION            | AWS region                              |
+| Variable                | Description                             |
+| ----------------------- | ---------------------------------------- |
+| DATABASE_URL            | PostgreSQL connection string            |
+| REDIS_URL               | Redis connection string                 |
+| JWT_SECRET              | **Required.** Secret used to sign JWT tokens. The gateway refuses to start if this is unset - there is no default. Generate with `openssl rand -base64 48`. |
+| ALLOWED_ORIGIN          | Comma-separated list of origins allowed to call the gateway from a browser. Leave blank and cross-origin requests are blocked in production (allowed in local dev). |
+| POSTGRES_PASSWORD       | Password for the `postgres` user used by both the `db` service and the gateway/worker connection string. Change beyond local dev. |
+| FLOCI_ENDPOINT          | Endpoint of a local AWS-API-compatible mock (e.g. LocalStack), used when `mode: "floci"` is passed to `/api/audit`. Leave blank if only auditing real AWS. |
+| MAX_TASK_RETRIES        | Number of times the worker retries a failed audit task before dead-lettering it. Default 3. |
+| TASK_RETRY_DELAY_SECONDS| Delay between retry attempts. Default 5. |
+| AWS_ACCESS_KEY_ID       | AWS access key (runtime)                |
+| AWS_SECRET_ACCESS_KEY   | AWS secret key (runtime)                |
+| AWS_SESSION_TOKEN       | Temporary session token (if applicable) |
+| AWS_REGION              | AWS region                              |
+| GEMINI_API_KEY          | Optional. Enables `/api/ai/summary`.    |
 
-Most AWS variables are injected automatically by `start.sh`.
+Most AWS variables are injected automatically by `start.sh`. All others are
+read from `infra/.env` - copy `infra/.env.example` to `infra/.env` and fill
+it in before running `docker compose up`.
 
 ---
 
@@ -119,22 +127,16 @@ docker compose logs -f
 
 # Running Tests
 
-Execute the end-to-end workflow:
-
-```bash
-./test-flow.sh
-```
-
-Gateway tests:
+Gateway tests (from `gateway/`):
 
 ```bash
 npm test
 ```
 
-Worker tests:
+Worker tests (from `worker/`, with `../tests` containing the test files):
 
 ```bash
-python -m unittest discover
+python -m unittest discover -s ../tests -p "test_worker.py"
 ```
 
 ---

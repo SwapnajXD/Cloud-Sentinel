@@ -39,7 +39,7 @@ This document describes the architecture of Cloud-Sentinel, how its services com
                           ▼                                               ▼
                  ┌────────────────┐                           ┌────────────────────┐
                  │   AWS Services │                           │    PostgreSQL      │
-                 │  S3 • EC2 • IAM│                           │  Audit Reports DB  │
+                 │ S3•EC2•IAM•RDS │                           │  Audit Reports DB  │
                  └────────────────┘                           └────────────────────┘
 ```
 
@@ -77,11 +77,13 @@ Responsibilities:
 * Store pending audit tasks
 * Decouple API requests from long-running scans
 * Enable asynchronous processing
+* Hold permanently-failed tasks for inspection (dead-letter queue)
 
-Queue used:
+Queues used:
 
 ```text
-audit_tasks
+audit_tasks       - pending work, consumed via BRPOP
+audit_tasks_dead  - tasks that failed every retry attempt
 ```
 
 ---
@@ -91,9 +93,13 @@ audit_tasks
 Responsibilities:
 
 * Listen for audit tasks
+* Mark each task `running` in `audit_tasks`, then `done`/`error` when finished
 * Execute AWS scans
 * Build report
 * Save results to PostgreSQL
+* Retry failed tasks with a fixed delay (`MAX_TASK_RETRIES`,
+  `TASK_RETRY_DELAY_SECONDS`, default 3 retries / 5s delay); tasks that
+  exhaust their retries are pushed to `audit_tasks_dead` and marked `error`
 
 ---
 
@@ -103,7 +109,7 @@ Stores:
 
 * Users
 * Audit reports
-* Scan metadata
+* Audit task status (`audit_tasks`: queued → running → done/error)
 
 ---
 
@@ -111,9 +117,10 @@ Stores:
 
 Current supported services:
 
-* Amazon S3
-* Amazon EC2
-* AWS IAM
+* Amazon S3 (public access, encryption)
+* Amazon EC2 (running instances, open security groups)
+* AWS IAM (user MFA, root MFA, unused/stale access keys)
+* Amazon RDS (public accessibility, storage encryption)
 
 Additional services can be added by creating new scan modules.
 
@@ -207,7 +214,6 @@ Potential improvements include:
 
 * Scheduled audits
 * Email notifications
-* WebSocket-based live status updates
-* Retry mechanism for failed jobs
-* Support for additional AWS services (RDS, Lambda, ECS)
+* WebSocket-based live status updates (currently the dashboard polls `GET /api/audit/:task_id`)
+* Support for additional AWS services (Lambda, ECS)
 * Cloud deployment using Kubernetes

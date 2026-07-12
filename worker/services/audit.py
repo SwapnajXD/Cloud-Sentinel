@@ -14,6 +14,12 @@ from scans.ec2 import (
 from scans.iam import (
     check_mfa_for_current_user,
     check_root_mfa_enabled,
+    check_unused_access_keys,
+)
+
+from scans.rds import (
+    list_public_rds_instances,
+    list_unencrypted_rds_instances,
 )
 
 
@@ -99,6 +105,54 @@ def build_audit_report(task, aws_clients, mode="aws"):
         "remediation": "Enable MFA in AWS IAM console.",
         "details": f"MFA Status: {mfa['status']}",
     })
+
+    # =========================
+    # ✅ IAM Unused Access Keys
+    # =========================
+    try:
+        for f in check_unused_access_keys(aws_clients["iam"], aws_clients["sts"]):
+            f.update({
+                "category": "IAM",
+                "title": "Unused or stale access key",
+                "description": "An IAM access key has not been used recently.",
+                "impact": "Unused credentials are a common target for compromise since they're often forgotten.",
+                "remediation": "Rotate or deactivate access keys that are no longer needed.",
+            })
+            findings.append(f)
+    except Exception:
+        pass
+
+    # =========================
+    # ✅ RDS Public Access & Encryption
+    # =========================
+    try:
+        for f in list_public_rds_instances(aws_clients["rds"]):
+            f.update({
+                "category": "RDS",
+                "title": "Publicly accessible RDS instance",
+                "description": "This RDS instance is configured as publicly accessible.",
+                "impact": "The database may be reachable directly from the internet.",
+                "remediation": "Disable public accessibility and access the DB through a VPC/bastion instead.",
+            })
+            findings.append(f)
+    except Exception:
+        pass
+
+    try:
+        for db in list_unencrypted_rds_instances(aws_clients["rds"]):
+            findings.append({
+                "type": "RDSEncryption",
+                "category": "RDS",
+                "severity": "critical" if not db["encrypted"] else "good",
+                "resource": db["instance"],
+                "title": "RDS storage encryption disabled",
+                "description": "This RDS instance does not have storage encryption enabled.",
+                "impact": "Data at rest may be exposed if underlying storage is compromised.",
+                "remediation": "Storage encryption can only be enabled at creation time; recreate the instance from an encrypted snapshot.",
+                "details": f"Engine: {db['engine']}",
+            })
+    except Exception:
+        pass
 
     # =========================
     # ✅ Root MFA

@@ -60,6 +60,17 @@ export type ActionResponse = {
   status?: string;
   message?: string;
   error?: string;
+  task_id?: string;
+};
+
+export type TaskStatusResponse = {
+  task_id: string;
+  status: "queued" | "running" | "done" | "error";
+  mode: string;
+  report_id: number | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
 };
 
 // ==============================
@@ -106,6 +117,15 @@ export function queueAudit(
         params: { scope },
       }),
     },
+    token
+  );
+}
+
+// 📡 Poll the status of a previously queued audit
+export function getTaskStatus(token: string, taskId: string) {
+  return apiRequest<TaskStatusResponse>(
+    `/api/audit/${taskId}`,
+    { method: "GET" },
     token
   );
 }

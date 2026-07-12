@@ -8,6 +8,7 @@ import * as bcrypt from 'bcryptjs';
 import { Pool, QueryResult } from 'pg';
 import { createClient } from 'redis';
 import cors from 'cors';
+import { randomUUID } from 'crypto';
 
 import { signToken, authenticateJWT, TokenPayload } from './lib/auth';
 
@@ -115,6 +116,26 @@ async function initDb(): Promise<void> {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_reports ON audit_reports(user_id, created_at DESC)
   `);
+
+  // Tracks the lifecycle of a queued audit (queued -> running -> done/error)
+  // so the dashboard can show real progress instead of blindly polling
+  // /api/reports and hoping something new shows up.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_tasks (
+      task_id TEXT PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      status TEXT NOT NULL DEFAULT 'queued',
+      mode TEXT NOT NULL DEFAULT 'aws',
+      report_id INTEGER REFERENCES audit_reports(id) ON DELETE SET NULL,
+      error TEXT,
+      created_at TIMESTAMP DEFAULT NOW(),
+      updated_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_audit_tasks_user ON audit_tasks(user_id, created_at DESC)
+  `);
 }
 
 // Start server
@@ -215,8 +236,10 @@ app.post('/api/audit', authenticateJWT, async (req: Request, res: Response) => {
 
     // ✅ NEW: accept mode from frontend
     const mode = req.body.mode === "floci" ? "floci" : "aws";
+    const task_id = randomUUID();
 
     const task = {
+      task_id,
       action: 'start_audit',
       user_id: user.id,
       requested_at: new Date().toISOString(),
@@ -224,12 +247,38 @@ app.post('/api/audit', authenticateJWT, async (req: Request, res: Response) => {
       params: req.body.params || {},
     };
 
+    await pool.query(
+      'INSERT INTO audit_tasks (task_id, user_id, status, mode) VALUES ($1, $2, $3, $4)',
+      [task_id, user.id, 'queued', mode]
+    );
+
     await redisClient.lPush('audit_tasks', JSON.stringify(task));
 
-    res.status(202).json({ status: 'queued', mode });
+    res.status(202).json({ status: 'queued', mode, task_id });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'queue failed' });
+  }
+});
+
+// Check the status of a previously queued audit
+app.get('/api/audit/:task_id', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const result = await pool.query(
+      `SELECT task_id, status, mode, report_id, error, created_at, updated_at
+       FROM audit_tasks WHERE task_id = $1 AND user_id = $2`,
+      [req.params.task_id, user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'task not found' });
+    }
+
+    res.json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'error fetching task status' });
   }
 });
 
