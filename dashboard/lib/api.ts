@@ -149,3 +149,15 @@ export function deleteAccount(token: string, password: string) {
     token
   );
 }
+
+// 🤖 AI summary for a given report (requires GEMINI_API_KEY on the gateway)
+export function getAiSummary(token: string, report: any) {
+  return apiRequest<{ summary?: string; error?: string }>(
+    "/api/ai/summary",
+    {
+      method: "POST",
+      body: JSON.stringify({ report }),
+    },
+    token
+  );
+}

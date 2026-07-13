@@ -169,8 +169,6 @@ Detailed documentation is available in the `docs/` directory.
 * Task retries use a fixed delay (no exponential backoff) and there's no UI
   for inspecting the `audit_tasks_dead` dead-letter queue yet - that requires
   manual Redis inspection.
-* `/api/ai/summary` (Gemini-based report summarization) is implemented on the
-  gateway but not yet wired into the dashboard UI.
 * No account lockout after repeated failed logins beyond the 10-req/15-min
   rate limit on `/api/login`.
 * AWS scan modules cover S3, EC2, IAM, and RDS only; see the roadmap below

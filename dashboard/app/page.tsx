@@ -5,10 +5,10 @@ import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
 import { getReports, queueAudit, getTaskStatus } from "@/lib/api";
 import TopBar from "@/components/dashboard/TopBar";
-import SummaryStats from "@/components/dashboard/SummaryStats";
-import FindingsList from "@/components/dashboard/FindingsList";
+import FindingsPanel from "@/components/dashboard/FindingsPanel";
 import ScanHistory from "@/components/dashboard/ScanHistory";
 import EmptyState from "@/components/dashboard/EmptyState";
+import DeleteAccountModal from "@/components/dashboard/DeleteAccountModal";
 import RadarSweep from "@/components/sentinel/RadarSweep";
 
 type ScanBanner =
@@ -24,6 +24,7 @@ export default function DashboardPage() {
   const [selected, setSelected] = useState(0);
   const [banner, setBanner] = useState<ScanBanner | null>(null);
   const [loadingReports, setLoadingReports] = useState(true);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   useEffect(() => {
     if (ready && !token) router.replace("/login");
@@ -100,7 +101,6 @@ export default function DashboardPage() {
   }
 
   const selectedReport = reports[selected];
-  const findings = selectedReport?.report?.findings || [];
 
   return (
     <div className="min-h-screen">
@@ -112,7 +112,19 @@ export default function DashboardPage() {
           signOut();
           router.replace("/login");
         }}
+        onDeleteAccount={() => setShowDeleteModal(true)}
       />
+
+      {showDeleteModal && token && (
+        <DeleteAccountModal
+          token={token}
+          onClose={() => setShowDeleteModal(false)}
+          onDeleted={() => {
+            signOut();
+            router.replace("/login");
+          }}
+        />
+      )}
 
       <main className="max-w-5xl mx-auto px-6 py-8 space-y-6">
         {banner && (
@@ -135,10 +147,7 @@ export default function DashboardPage() {
 
         {reports.length > 0 && (
           <div className="grid lg:grid-cols-[1fr_260px] gap-6 items-start">
-            <div className="space-y-6 min-w-0">
-              <SummaryStats findings={findings} />
-              <FindingsList findings={findings} />
-            </div>
+            <FindingsPanel report={selectedReport} token={token} />
             <ScanHistory reports={reports} selected={selected} onSelect={setSelected} />
           </div>
         )}

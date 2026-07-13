@@ -127,7 +127,9 @@ docker compose logs -f
 
 # Running Tests
 
-Gateway tests (from `gateway/`):
+Gateway tests (from `gateway/`) - includes both unit tests for the JWT
+helpers and full integration tests against every exposed API route (via
+supertest, with Postgres/Redis mocked so no live infra is needed):
 
 ```bash
 npm test

@@ -2,17 +2,20 @@
 
 import BeaconDot from "@/components/sentinel/BeaconDot";
 import Button from "@/components/ui/Button";
+import AccountMenu from "@/components/dashboard/AccountMenu";
 
 export default function TopBar({
   email,
   scanning,
   onScan,
   onSignOut,
+  onDeleteAccount,
 }: {
   email: string | null;
   scanning: boolean;
   onScan: (mode: "aws" | "floci") => void;
   onSignOut: () => void;
+  onDeleteAccount: () => void;
 }) {
   return (
     <header className="border-b border-line">
@@ -35,10 +38,7 @@ export default function TopBar({
             Scan Floci
           </Button>
           <div className="w-px h-6 bg-line mx-1" />
-          <span className="text-xs text-slate hidden sm:inline mono">{email}</span>
-          <Button variant="ghost" onClick={onSignOut}>
-            Sign out
-          </Button>
+          <AccountMenu email={email} onSignOut={onSignOut} onDeleteAccount={onDeleteAccount} />
         </div>
       </div>
     </header>
