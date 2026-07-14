@@ -3,6 +3,8 @@ import psycopg2
 import os
 import time
 import sys
+import threading
+import uuid
 import boto3
 import redis
 from datetime import datetime, timezone
@@ -26,6 +28,8 @@ DATABASE_URL = os.getenv(
 
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
 FLOCI_ENDPOINT = os.getenv("FLOCI_ENDPOINT", None)
+
+SCHEDULER_POLL_SECONDS = int(os.getenv("SCHEDULER_POLL_SECONDS", "60"))
 
 
 # =========================
@@ -54,6 +58,7 @@ def get_aws_clients(mode="aws"):
             "iam": session.client("iam", endpoint_url=FLOCI_ENDPOINT),
             "sts": session.client("sts", endpoint_url=FLOCI_ENDPOINT),
             "rds": session.client("rds", endpoint_url=FLOCI_ENDPOINT),
+            "lambda": session.client("lambda", endpoint_url=FLOCI_ENDPOINT),
         }
 
     print("[MODE] ☁️ Using REAL AWS")
@@ -64,6 +69,7 @@ def get_aws_clients(mode="aws"):
         "iam": session.client("iam"),
         "sts": session.client("sts"),
         "rds": session.client("rds"),
+        "lambda": session.client("lambda"),
     }
 
 
@@ -101,6 +107,19 @@ def ensure_schema(conn):
                 error TEXT,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        # Mirrors the table the gateway creates for recurring scans.
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS scheduled_scans (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                mode TEXT NOT NULL DEFAULT 'aws',
+                interval_hours INTEGER NOT NULL,
+                next_run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
             """
         )
@@ -250,6 +269,70 @@ def handle_task_failure(client, task, error_message):
 
 
 # =========================
+# ✅ Scheduler (recurring scans)
+# =========================
+def run_scheduler():
+    """Runs in its own thread. Every SCHEDULER_POLL_SECONDS, checks for
+    scheduled_scans rows that have come due and enqueues them exactly like
+    a manually-triggered scan (same audit_tasks row, same Redis push) -
+    scheduled and manual scans are indistinguishable once queued."""
+    print(f"⏰ Scheduler started, polling every {SCHEDULER_POLL_SECONDS}s")
+
+    while True:
+        try:
+            _check_due_schedules()
+        except Exception as e:
+            print(f"❌ Scheduler error: {e}")
+
+        time.sleep(SCHEDULER_POLL_SECONDS)
+
+
+def _check_due_schedules():
+    conn = get_db_connection()
+    redis_client = get_redis_client()
+
+    try:
+        ensure_schema(conn)
+
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, user_id, mode, interval_hours
+                FROM scheduled_scans
+                WHERE next_run_at <= NOW()
+                """
+            )
+            due = cursor.fetchall()
+
+        for schedule_id, user_id, mode, interval_hours in due:
+            task_id = str(uuid.uuid4())
+            task = {
+                "task_id": task_id,
+                "action": "start_audit",
+                "user_id": user_id,
+                "requested_at": datetime.now(timezone.utc).isoformat(),
+                "mode": mode,
+                "params": {"scope": "scheduled", "schedule_id": schedule_id},
+            }
+
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "INSERT INTO audit_tasks (task_id, user_id, status, mode) VALUES (%s, %s, %s, %s)",
+                    (task_id, user_id, "queued", mode),
+                )
+                cursor.execute(
+                    "UPDATE scheduled_scans SET next_run_at = NOW() + make_interval(hours => %s) WHERE id = %s",
+                    (interval_hours, schedule_id),
+                )
+            conn.commit()
+
+            redis_client.lpush("audit_tasks", json.dumps(task))
+            print(f"[SCHEDULED SCAN QUEUED] schedule_id={schedule_id} user={user_id} mode={mode} task_id={task_id}")
+    finally:
+        conn.close()
+
+
+# =========================
 # ✅ Worker loop
 # =========================
 def run_worker():
@@ -284,6 +367,9 @@ def run_worker():
 # ✅ Entry
 # =========================
 def main():
+    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
+    scheduler_thread.start()
+
     run_worker()
 
 

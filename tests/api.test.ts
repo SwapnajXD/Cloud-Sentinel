@@ -29,6 +29,10 @@ const mockLPush = jest.fn();
 const mockPing = jest.fn();
 const mockConnect = jest.fn().mockResolvedValue(undefined);
 const mockDisconnect = jest.fn().mockResolvedValue(undefined);
+const mockLRange = jest.fn();
+const mockMultiDel = jest.fn();
+const mockMultiRPush = jest.fn();
+const mockMultiExec = jest.fn().mockResolvedValue([]);
 
 jest.mock("redis", () => ({
   createClient: jest.fn().mockImplementation(() => ({
@@ -38,6 +42,12 @@ jest.mock("redis", () => ({
     isOpen: true,
     lPush: mockLPush,
     ping: mockPing,
+    lRange: mockLRange,
+    multi: jest.fn().mockImplementation(() => ({
+      del: mockMultiDel,
+      rPush: mockMultiRPush,
+      exec: mockMultiExec,
+    })),
   })),
 }));
 
@@ -58,6 +68,10 @@ beforeEach(() => {
   mockQuery.mockReset();
   mockLPush.mockReset();
   mockPing.mockReset().mockResolvedValue("PONG");
+  mockLRange.mockReset();
+  mockMultiDel.mockReset();
+  mockMultiRPush.mockReset();
+  mockMultiExec.mockReset().mockResolvedValue([]);
 });
 
 describe("GET /health", () => {
@@ -215,6 +229,11 @@ describe("protected routes require a valid token", () => {
     ["get", "/api/reports"],
     ["delete", "/api/account"],
     ["post", "/api/ai/summary"],
+    ["post", "/api/schedules"],
+    ["get", "/api/schedules"],
+    ["delete", "/api/schedules/1"],
+    ["get", "/api/dead-letter"],
+    ["delete", "/api/dead-letter/some-id"],
   ])("%s %s returns 401 with no Authorization header", async (method, url) => {
     const res = await (request(app) as any)[method](url);
     expect(res.status).toBe(401);
@@ -397,5 +416,162 @@ describe("POST /api/ai/summary", () => {
 
     expect(res.status).toBe(500);
     expect(res.body.error).toBe("no api key");
+  });
+});
+
+describe("POST /api/schedules", () => {
+  it("rejects a non-integer interval_hours", async () => {
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .post("/api/schedules")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ mode: "aws", interval_hours: "not-a-number" });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects an interval outside 1-168 hours", async () => {
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .post("/api/schedules")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ mode: "aws", interval_hours: 500 });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("creates a schedule with a valid interval", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: 1, mode: "aws", interval_hours: 24, next_run_at: "2026-01-02T00:00:00Z", created_at: "2026-01-01T00:00:00Z" }],
+    });
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .post("/api/schedules")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ mode: "aws", interval_hours: 24 });
+
+    expect(res.status).toBe(201);
+    expect(res.body.interval_hours).toBe(24);
+  });
+
+  it("requires a token", async () => {
+    const res = await request(app).post("/api/schedules").send({ interval_hours: 24 });
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("GET /api/schedules", () => {
+  it("returns the caller's schedules", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: 1, mode: "aws", interval_hours: 24, next_run_at: "2026-01-02T00:00:00Z", created_at: "2026-01-01T00:00:00Z" }],
+    });
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .get("/api/schedules")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.schedules).toHaveLength(1);
+  });
+});
+
+describe("DELETE /api/schedules/:id", () => {
+  it("returns 404 when the schedule doesn't exist or belongs to someone else", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .delete("/api/schedules/999")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("deletes the schedule when it belongs to the caller", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 1 }] });
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .delete("/api/schedules/1")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("GET /api/dead-letter", () => {
+  it("returns only the caller's dead-lettered tasks", async () => {
+    mockLRange.mockResolvedValueOnce([
+      JSON.stringify({ task_id: "mine", user_id: 1, mode: "aws", final_error: "boom" }),
+      JSON.stringify({ task_id: "not-mine", user_id: 2, mode: "aws", final_error: "boom" }),
+    ]);
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .get("/api/dead-letter")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.tasks).toHaveLength(1);
+    expect(res.body.tasks[0].task_id).toBe("mine");
+  });
+
+  it("skips unparseable entries instead of crashing", async () => {
+    mockLRange.mockResolvedValueOnce(["not json at all"]);
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .get("/api/dead-letter")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.tasks).toEqual([]);
+  });
+
+  it("requires a token", async () => {
+    const res = await request(app).get("/api/dead-letter");
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("DELETE /api/dead-letter/:task_id", () => {
+  it("returns 404 when the task isn't found or belongs to someone else", async () => {
+    mockLRange.mockResolvedValueOnce([
+      JSON.stringify({ task_id: "not-mine", user_id: 2, mode: "aws" }),
+    ]);
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .delete("/api/dead-letter/mine")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(404);
+    expect(mockMultiDel).not.toHaveBeenCalled();
+  });
+
+  it("removes the matching task and rebuilds the list without it", async () => {
+    mockLRange.mockResolvedValueOnce([
+      JSON.stringify({ task_id: "keep-me", user_id: 1, mode: "aws" }),
+      JSON.stringify({ task_id: "remove-me", user_id: 1, mode: "floci" }),
+    ]);
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .delete("/api/dead-letter/remove-me")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(mockMultiDel).toHaveBeenCalledWith("audit_tasks_dead");
+    expect(mockMultiRPush).toHaveBeenCalledWith(
+      "audit_tasks_dead",
+      [JSON.stringify({ task_id: "keep-me", user_id: 1, mode: "aws" })]
+    );
+  });
+
+  it("requires a token", async () => {
+    const res = await request(app).delete("/api/dead-letter/some-id");
+    expect(res.status).toBe(401);
   });
 });

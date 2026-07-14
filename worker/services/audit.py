@@ -22,6 +22,11 @@ from scans.rds import (
     list_unencrypted_rds_instances,
 )
 
+from scans.lambda_checks import (
+    list_public_lambda_functions,
+    check_deprecated_lambda_runtimes,
+)
+
 
 def build_audit_report(task, aws_clients, mode="aws"):
     findings = []
@@ -189,6 +194,41 @@ def build_audit_report(task, aws_clients, mode="aws"):
                 ),
                 "details": f"Engine: {db['engine']}",
             })
+    except Exception:
+        pass
+
+    # =========================
+    # ✅ Lambda Public Exposure & Deprecated Runtimes
+    # =========================
+    try:
+        for f in list_public_lambda_functions(aws_clients["lambda"]):
+            f.update({
+                "category": "Lambda",
+                "title": (
+                    "Lambda function publicly invokable (Function URL)"
+                    if f["type"] == "LambdaPublicFunctionURL" else
+                    "Lambda function publicly invokable (resource policy)"
+                ),
+                "description": f["details"],
+                "impact": "Anyone on the internet can invoke this function without authentication.",
+                "remediation": (
+                    "Set the Function URL's AuthType to AWS_IAM, or restrict the resource policy to specific principals."
+                ),
+            })
+            findings.append(f)
+    except Exception:
+        pass
+
+    try:
+        for f in check_deprecated_lambda_runtimes(aws_clients["lambda"]):
+            f.update({
+                "category": "Lambda",
+                "title": "Deprecated Lambda runtime",
+                "description": f["details"],
+                "impact": "This runtime no longer receives security patches from AWS.",
+                "remediation": "Upgrade the function to a currently-supported runtime version.",
+            })
+            findings.append(f)
     except Exception:
         pass
 

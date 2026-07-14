@@ -13,10 +13,11 @@ from scans.iam import check_mfa_for_current_user
 
 
 class FakeCursor:
-    def __init__(self, fetchone_value=None):
+    def __init__(self, fetchone_value=None, fetchall_value=None):
         self.statements = []
         self.params = []
         self.fetchone_value = fetchone_value
+        self.fetchall_value = fetchall_value if fetchall_value is not None else []
 
     def execute(self, statement, params=None):
         self.statements.append(statement)
@@ -24,6 +25,9 @@ class FakeCursor:
 
     def fetchone(self):
         return self.fetchone_value
+
+    def fetchall(self):
+        return self.fetchall_value
 
     def __enter__(self):
         return self
@@ -55,6 +59,7 @@ def _fake_aws_clients():
         "iam": SimpleNamespace(),
         "sts": SimpleNamespace(),
         "rds": SimpleNamespace(),
+        "lambda": SimpleNamespace(),
     }
 
 
@@ -262,6 +267,69 @@ class WorkerTests(unittest.TestCase):
         self.assertTrue(by_id["encrypted-db"]["encrypted"])
         self.assertFalse(by_id["plain-db"]["encrypted"])
 
+    def test_list_public_lambda_functions_flags_public_function_url(self):
+        from scans.lambda_checks import list_public_lambda_functions
+
+        lam = Mock(spec=["list_functions", "get_function_url_config", "get_policy"])
+        lam.list_functions.return_value = {"Functions": [{"FunctionName": "public-fn"}]}
+        lam.get_function_url_config.return_value = {
+            "AuthType": "NONE", "FunctionUrl": "https://abc.lambda-url.us-east-1.on.aws/"
+        }
+        lam.get_policy.side_effect = Exception("no resource policy")
+
+        findings = list_public_lambda_functions(lam)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["type"], "LambdaPublicFunctionURL")
+        self.assertEqual(findings[0]["severity"], "critical")
+
+    def test_list_public_lambda_functions_flags_public_resource_policy(self):
+        from scans.lambda_checks import list_public_lambda_functions
+        import json as _json
+
+        lam = Mock(spec=["list_functions", "get_function_url_config", "get_policy"])
+        lam.list_functions.return_value = {"Functions": [{"FunctionName": "open-fn"}]}
+        lam.get_function_url_config.side_effect = Exception("no function url configured")
+        lam.get_policy.return_value = {
+            "Policy": _json.dumps({
+                "Statement": [{"Effect": "Allow", "Principal": "*", "Action": "lambda:InvokeFunction"}]
+            })
+        }
+
+        findings = list_public_lambda_functions(lam)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["type"], "LambdaPublicInvokePermission")
+
+    def test_list_public_lambda_functions_ignores_private_functions(self):
+        from scans.lambda_checks import list_public_lambda_functions
+
+        lam = Mock(spec=["list_functions", "get_function_url_config", "get_policy"])
+        lam.list_functions.return_value = {"Functions": [{"FunctionName": "private-fn"}]}
+        lam.get_function_url_config.side_effect = Exception("no function url configured")
+        lam.get_policy.side_effect = Exception("no resource policy")
+
+        findings = list_public_lambda_functions(lam)
+
+        self.assertEqual(findings, [])
+
+    def test_check_deprecated_lambda_runtimes_flags_old_runtimes_only(self):
+        from scans.lambda_checks import check_deprecated_lambda_runtimes
+
+        lam = Mock(spec=["list_functions"])
+        lam.list_functions.return_value = {
+            "Functions": [
+                {"FunctionName": "old-fn", "Runtime": "python3.7"},
+                {"FunctionName": "current-fn", "Runtime": "python3.12"},
+            ]
+        }
+
+        findings = check_deprecated_lambda_runtimes(lam)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["resource"], "old-fn")
+        self.assertEqual(findings[0]["severity"], "medium")
+
     def test_open_security_group_flags_ssh_as_critical(self):
         from scans.ec2 import check_open_security_groups
 
@@ -463,6 +531,41 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(queue_name, worker.DEAD_LETTER_QUEUE)
         dead_lettered = json.loads(payload)
         self.assertEqual(dead_lettered["final_error"], "still broken")
+
+    def test_check_due_schedules_enqueues_and_advances_next_run(self):
+        conn = FakeConnection()
+        conn.cursor_obj.fetchall_value = [(7, 42, "aws", 24)]  # one due schedule
+        fake_redis = Mock()
+
+        with patch.object(worker, "get_db_connection", return_value=conn), \
+             patch.object(worker, "get_redis_client", return_value=fake_redis):
+            worker._check_due_schedules()
+
+        # Enqueued to Redis exactly like a manually-triggered scan
+        fake_redis.lpush.assert_called_once()
+        queue_name, payload = fake_redis.lpush.call_args[0]
+        self.assertEqual(queue_name, "audit_tasks")
+        task = json.loads(payload)
+        self.assertEqual(task["user_id"], 42)
+        self.assertEqual(task["mode"], "aws")
+        self.assertEqual(task["params"]["schedule_id"], 7)
+
+        # An audit_tasks row and a next_run_at advance were both written
+        statements = " ".join(conn.cursor_obj.statements)
+        self.assertIn("INSERT INTO audit_tasks", statements)
+        self.assertIn("UPDATE scheduled_scans", statements)
+        self.assertTrue(conn.closed)  # scheduler always owns its connection
+
+    def test_check_due_schedules_does_nothing_when_none_are_due(self):
+        conn = FakeConnection()
+        conn.cursor_obj.fetchall_value = []
+        fake_redis = Mock()
+
+        with patch.object(worker, "get_db_connection", return_value=conn), \
+             patch.object(worker, "get_redis_client", return_value=fake_redis):
+            worker._check_due_schedules()
+
+        fake_redis.lpush.assert_not_called()
 
 
 if __name__ == "__main__":

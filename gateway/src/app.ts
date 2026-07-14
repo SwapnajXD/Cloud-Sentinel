@@ -136,6 +136,28 @@ export async function initDb(): Promise<void> {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_audit_tasks_user ON audit_tasks(user_id, created_at DESC)
   `);
+
+  // Recurring scans: a schedule is checked by the worker's background
+  // scheduler loop and turned into a normal audit_tasks row + Redis push
+  // when it comes due, exactly like a manually-triggered scan.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS scheduled_scans (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      mode TEXT NOT NULL DEFAULT 'aws',
+      interval_hours INTEGER NOT NULL,
+      next_run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_scheduled_scans_user ON scheduled_scans(user_id, created_at DESC)
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_scheduled_scans_due ON scheduled_scans(next_run_at)
+  `);
 }
 
 // Types
@@ -341,6 +363,139 @@ app.post('/api/ai/summary', authenticateJWT, async (req: Request, res: Response)
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'ai failed' });
+  }
+});
+
+// Recurring scans
+const MIN_INTERVAL_HOURS = 1;
+const MAX_INTERVAL_HOURS = 168; // 1 week - keep it sane for a homelab-scale tool
+
+app.post('/api/schedules', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const mode = req.body.mode === 'floci' ? 'floci' : 'aws';
+    const intervalHours = Number(req.body.interval_hours);
+
+    if (
+      !Number.isInteger(intervalHours) ||
+      intervalHours < MIN_INTERVAL_HOURS ||
+      intervalHours > MAX_INTERVAL_HOURS
+    ) {
+      return res.status(400).json({
+        error: `interval_hours must be an integer between ${MIN_INTERVAL_HOURS} and ${MAX_INTERVAL_HOURS}`,
+      });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO scheduled_scans (user_id, mode, interval_hours, next_run_at)
+       VALUES ($1, $2, $3, NOW() + make_interval(hours => $3))
+       RETURNING id, mode, interval_hours, next_run_at, created_at`,
+      [user.id, mode, intervalHours]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to create schedule' });
+  }
+});
+
+app.get('/api/schedules', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const result = await pool.query(
+      `SELECT id, mode, interval_hours, next_run_at, created_at
+       FROM scheduled_scans WHERE user_id = $1 ORDER BY created_at DESC`,
+      [user.id]
+    );
+    res.json({ schedules: result.rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to fetch schedules' });
+  }
+});
+
+app.delete('/api/schedules/:id', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const result = await pool.query(
+      'DELETE FROM scheduled_scans WHERE id = $1 AND user_id = $2 RETURNING id',
+      [req.params.id, user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'schedule not found' });
+    }
+
+    res.json({ status: 'success' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to delete schedule' });
+  }
+});
+
+// Dead-letter queue: tasks that exhausted every retry. Only returns (and
+// only lets you dismiss) entries belonging to the caller - the queue itself
+// has no per-user separation in Redis, so we filter/rebuild it here.
+const DEAD_LETTER_QUEUE = 'audit_tasks_dead';
+
+app.get('/api/dead-letter', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    // Bounded read: this is meant for "a handful of failed scans to review",
+    // not an unbounded audit log.
+    const raw = await redisClient.lRange(DEAD_LETTER_QUEUE, 0, 199);
+
+    const tasks = raw
+      .map((entry) => {
+        try {
+          return JSON.parse(entry);
+        } catch {
+          return null;
+        }
+      })
+      .filter((t) => t && t.user_id === user.id);
+
+    res.json({ tasks });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'error fetching dead-letter queue' });
+  }
+});
+
+app.delete('/api/dead-letter/:task_id', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const raw = await redisClient.lRange(DEAD_LETTER_QUEUE, 0, -1);
+
+    let removed = false;
+    const remaining = raw.filter((entry) => {
+      let parsed: any;
+      try {
+        parsed = JSON.parse(entry);
+      } catch {
+        return true; // keep anything we can't parse rather than silently dropping it
+      }
+      const isMatch = parsed.task_id === req.params.task_id && parsed.user_id === user.id;
+      if (isMatch) removed = true;
+      return !isMatch;
+    });
+
+    if (!removed) {
+      return res.status(404).json({ error: 'not found' });
+    }
+
+    const multi = redisClient.multi();
+    multi.del(DEAD_LETTER_QUEUE);
+    if (remaining.length > 0) {
+      multi.rPush(DEAD_LETTER_QUEUE, remaining);
+    }
+    await multi.exec();
+
+    res.json({ status: 'success' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'error dismissing dead-letter task' });
   }
 });
 

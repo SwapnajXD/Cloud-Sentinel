@@ -19,11 +19,15 @@ Cloud-Sentinel demonstrates production-style backend engineering concepts includ
 * List running EC2 instances
 * Detect publicly accessible RDS instances
 * Verify RDS storage encryption
+* Detect publicly invokable Lambda functions (public Function URLs or resource policies)
+* Flag Lambda functions on deprecated runtimes
 
 ### ⚙️ Backend Architecture
 
 * Distributed worker architecture
 * Redis-based asynchronous job queue with retry + dead-letter handling
+* Dead-letter queue inspection and dismissal from the dashboard
+* Recurring/scheduled scans (hourly-granularity intervals, 1h-1 week)
 * Per-task status tracking (queued → running → done/error)
 * JWT authentication
 * PostgreSQL persistence
@@ -119,6 +123,11 @@ cd ../worker && python -m unittest discover -s ../tests -p "test_worker.py"
 | POST   | `/api/audit`          | Queue an AWS audit           |
 | GET    | `/api/audit/:task_id` | Check audit task status      |
 | GET    | `/api/reports`        | Retrieve audit reports       |
+| POST   | `/api/schedules`      | Create a recurring scan      |
+| GET    | `/api/schedules`      | List recurring scans         |
+| DELETE | `/api/schedules/:id`  | Cancel a recurring scan      |
+| GET    | `/api/dead-letter`    | List scans that failed all retries |
+| DELETE | `/api/dead-letter/:task_id` | Dismiss a dead-lettered scan |
 | DELETE | `/api/account`        | Delete account (password-confirmed) |
 | GET    | `/health`             | Health check                 |
 
@@ -180,8 +189,6 @@ Detailed documentation is available in the `docs/` directory.
 
 Planned enhancements include:
 
-* Lambda security checks
-* Scheduled audits
 * Email notifications
 * Dashboard analytics
 * Kubernetes deployment

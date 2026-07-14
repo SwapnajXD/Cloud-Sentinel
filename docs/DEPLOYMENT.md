@@ -62,6 +62,7 @@ The project uses the following environment variables.
 | FLOCI_ENDPOINT          | Endpoint of a local AWS-API-compatible mock (e.g. LocalStack), used when `mode: "floci"` is passed to `/api/audit`. Leave blank if only auditing real AWS. |
 | MAX_TASK_RETRIES        | Number of times the worker retries a failed audit task before dead-lettering it. Default 3. |
 | TASK_RETRY_DELAY_SECONDS| Delay between retry attempts. Default 5. |
+| SCHEDULER_POLL_SECONDS  | How often the worker checks for due recurring scans (`scheduled_scans`). Default 60. |
 | AWS_ACCESS_KEY_ID       | AWS access key (runtime)                |
 | AWS_SECRET_ACCESS_KEY   | AWS secret key (runtime)                |
 | AWS_SESSION_TOKEN       | Temporary session token (if applicable) |

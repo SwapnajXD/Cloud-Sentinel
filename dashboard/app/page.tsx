@@ -3,10 +3,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { getReports, queueAudit, getTaskStatus } from "@/lib/api";
+import { getReports, queueAudit, getTaskStatus, getDeadLetterTasks, DeadLetterTask, getSchedules, Schedule } from "@/lib/api";
 import TopBar from "@/components/dashboard/TopBar";
 import FindingsPanel from "@/components/dashboard/FindingsPanel";
 import ScanHistory from "@/components/dashboard/ScanHistory";
+import DeadLetterPanel from "@/components/dashboard/DeadLetterPanel";
+import ScheduleManager from "@/components/dashboard/ScheduleManager";
 import EmptyState from "@/components/dashboard/EmptyState";
 import DeleteAccountModal from "@/components/dashboard/DeleteAccountModal";
 import RadarSweep from "@/components/sentinel/RadarSweep";
@@ -25,6 +27,8 @@ export default function DashboardPage() {
   const [banner, setBanner] = useState<ScanBanner | null>(null);
   const [loadingReports, setLoadingReports] = useState(true);
   const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deadLetterTasks, setDeadLetterTasks] = useState<DeadLetterTask[]>([]);
+  const [schedules, setSchedules] = useState<Schedule[]>([]);
 
   useEffect(() => {
     if (ready && !token) router.replace("/login");
@@ -46,9 +50,31 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const fetchDeadLetterTasks = useCallback(async (tk: string) => {
+    try {
+      const res = await getDeadLetterTasks(tk);
+      setDeadLetterTasks(res.tasks || []);
+    } catch (err) {
+      console.error("Failed to fetch dead-letter tasks", err);
+    }
+  }, []);
+
+  const fetchSchedules = useCallback(async (tk: string) => {
+    try {
+      const res = await getSchedules(tk);
+      setSchedules(res.schedules || []);
+    } catch (err) {
+      console.error("Failed to fetch schedules", err);
+    }
+  }, []);
+
   useEffect(() => {
-    if (token) fetchReports(token);
-  }, [token, fetchReports]);
+    if (token) {
+      fetchReports(token);
+      fetchDeadLetterTasks(token);
+      fetchSchedules(token);
+    }
+  }, [token, fetchReports, fetchDeadLetterTasks, fetchSchedules]);
 
   async function runScan(mode: "aws" | "floci") {
     if (!token) return;
@@ -80,10 +106,12 @@ export default function DashboardPage() {
             state: "error",
             message: status.error || "Scan failed",
           });
+          fetchDeadLetterTasks(token);
           return;
         }
       }
       setBanner({ mode, state: "error", message: "Timed out waiting for the scan to finish" });
+      fetchDeadLetterTasks(token);
     } catch (err) {
       console.error("Scan failed", err);
       setBanner({ mode, state: "error", message: "Failed to start scan" });
@@ -143,12 +171,24 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {!loadingReports && reports.length === 0 && <EmptyState />}
-
-        {reports.length > 0 && (
+        {!loadingReports && (
           <div className="grid lg:grid-cols-[1fr_260px] gap-6 items-start">
-            <FindingsPanel report={selectedReport} token={token} />
-            <ScanHistory reports={reports} selected={selected} onSelect={setSelected} />
+            {reports.length > 0 ? (
+              <FindingsPanel report={selectedReport} token={token} />
+            ) : (
+              <EmptyState />
+            )}
+            <div className="space-y-6">
+              <ScheduleManager token={token} schedules={schedules} onChanged={() => fetchSchedules(token)} />
+              <DeadLetterPanel
+                token={token}
+                tasks={deadLetterTasks}
+                onDismissed={(taskId) =>
+                  setDeadLetterTasks((prev) => prev.filter((t) => t.task_id !== taskId))
+                }
+              />
+              <ScanHistory reports={reports} selected={selected} onSelect={setSelected} />
+            </div>
           </div>
         )}
       </main>

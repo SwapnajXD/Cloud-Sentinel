@@ -161,3 +161,67 @@ export function getAiSummary(token: string, report: any) {
     token
   );
 }
+
+export type DeadLetterTask = {
+  task_id: string;
+  user_id: number;
+  action: string;
+  mode: string;
+  requested_at?: string;
+  params?: any;
+  final_error?: string;
+  _retries?: number;
+};
+
+// ⚰️ Tasks that exhausted every retry
+export function getDeadLetterTasks(token: string) {
+  return apiRequest<{ tasks: DeadLetterTask[] }>(
+    "/api/dead-letter",
+    { method: "GET" },
+    token
+  );
+}
+
+export function dismissDeadLetterTask(token: string, taskId: string) {
+  return apiRequest<ActionResponse>(
+    `/api/dead-letter/${taskId}`,
+    { method: "DELETE" },
+    token
+  );
+}
+
+export type Schedule = {
+  id: number;
+  mode: string;
+  interval_hours: number;
+  next_run_at: string;
+  created_at: string;
+};
+
+// 🔁 Recurring scans
+export function getSchedules(token: string) {
+  return apiRequest<{ schedules: Schedule[] }>(
+    "/api/schedules",
+    { method: "GET" },
+    token
+  );
+}
+
+export function createSchedule(token: string, mode: "aws" | "floci", intervalHours: number) {
+  return apiRequest<Schedule>(
+    "/api/schedules",
+    {
+      method: "POST",
+      body: JSON.stringify({ mode, interval_hours: intervalHours }),
+    },
+    token
+  );
+}
+
+export function deleteSchedule(token: string, id: number) {
+  return apiRequest<ActionResponse>(
+    `/api/schedules/${id}`,
+    { method: "DELETE" },
+    token
+  );
+}

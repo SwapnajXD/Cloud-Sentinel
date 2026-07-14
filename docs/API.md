@@ -250,6 +250,101 @@ Authorization: Bearer <jwt-token>
 
 ---
 
+## Create Recurring Scan
+
+Schedules a scan to run automatically on a fixed interval. The worker's
+background scheduler checks for due schedules every `SCHEDULER_POLL_SECONDS`
+(default 60s) and enqueues them exactly like a manually-triggered scan.
+
+### Request
+
+```http
+POST /api/schedules
+Authorization: Bearer <jwt-token>
+Content-Type: application/json
+```
+
+```json
+{ "mode": "aws", "interval_hours": 24 }
+```
+
+`interval_hours` must be an integer between 1 and 168 (one week).
+
+### Success Response
+
+```json
+{
+  "id": 1,
+  "mode": "aws",
+  "interval_hours": 24,
+  "next_run_at": "2026-07-15T10:00:00Z",
+  "created_at": "2026-07-14T10:00:00Z"
+}
+```
+
+---
+
+## List Recurring Scans
+
+```http
+GET /api/schedules
+Authorization: Bearer <jwt-token>
+```
+
+Returns `{ "schedules": [...] }` for the authenticated user, most recent first.
+
+---
+
+## Cancel Recurring Scan
+
+```http
+DELETE /api/schedules/:id
+Authorization: Bearer <jwt-token>
+```
+
+Returns `404` if the schedule doesn't exist or doesn't belong to the caller.
+
+---
+
+## List Dead-Lettered Scans
+
+Scans that failed every retry attempt end up here instead of vanishing
+silently. Only returns entries belonging to the authenticated user.
+
+```http
+GET /api/dead-letter
+Authorization: Bearer <jwt-token>
+```
+
+```json
+{
+  "tasks": [
+    {
+      "task_id": "5f2e1c3a-....",
+      "user_id": 1,
+      "mode": "aws",
+      "requested_at": "2026-07-14T09:00:00Z",
+      "final_error": "FLOCI_ENDPOINT not set",
+      "_retries": 3
+    }
+  ]
+}
+```
+
+---
+
+## Dismiss a Dead-Lettered Scan
+
+```http
+DELETE /api/dead-letter/:task_id
+Authorization: Bearer <jwt-token>
+```
+
+Removes the entry from the dead-letter queue. Returns `404` if it doesn't
+exist or belongs to someone else.
+
+---
+
 ## Delete Account
 
 Deletes the authenticated user's account and all of their audit reports

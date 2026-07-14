@@ -121,6 +121,7 @@ Current supported services:
 * Amazon EC2 (running instances, open security groups)
 * AWS IAM (user MFA, root MFA, unused/stale access keys)
 * Amazon RDS (public accessibility, storage encryption)
+* AWS Lambda (public Function URLs, public resource policies, deprecated runtimes)
 
 Additional services can be added by creating new scan modules.
 
@@ -212,8 +213,7 @@ Benefits:
 
 Potential improvements include:
 
-* Scheduled audits
 * Email notifications
 * WebSocket-based live status updates (currently the dashboard polls `GET /api/audit/:task_id`)
-* Support for additional AWS services (Lambda, ECS)
+* Support for additional AWS services (ECS)
 * Cloud deployment using Kubernetes
