@@ -15,6 +15,7 @@ from scans.iam import (
     check_mfa_for_current_user,
     check_root_mfa_enabled,
     check_unused_access_keys,
+    list_users_without_mfa,
 )
 
 from scans.rds import (
@@ -137,16 +138,32 @@ def build_audit_report(task, aws_clients, mode="aws"):
     })
 
     # =========================
-    # ✅ IAM Unused Access Keys
+    # ✅ IAM Unused Access Keys (account-wide - every user, not just the caller)
     # =========================
     try:
-        for f in check_unused_access_keys(aws_clients["iam"], aws_clients["sts"]):
+        for f in check_unused_access_keys(aws_clients["iam"]):
             f.update({
                 "category": "IAM",
                 "title": "Unused or stale access key",
                 "description": "An IAM access key has not been used recently.",
                 "impact": "Unused credentials are a common target for compromise since they're often forgotten.",
                 "remediation": "Rotate or deactivate access keys that are no longer needed.",
+            })
+            findings.append(f)
+    except Exception:
+        pass
+
+    # =========================
+    # ✅ IAM MFA - account-wide (every user, not just the scanning identity)
+    # =========================
+    try:
+        for f in list_users_without_mfa(aws_clients["iam"]):
+            f.update({
+                "category": "IAM",
+                "title": "IAM user without MFA",
+                "description": f["details"],
+                "impact": "This user's account can be compromised with a leaked password alone.",
+                "remediation": "Have this user enable MFA in the AWS IAM console.",
             })
             findings.append(f)
     except Exception:

@@ -190,20 +190,25 @@ class WorkerTests(unittest.TestCase):
         self.assertFalse(result["enabled"])
         self.assertEqual(result["status"], "unavailable")
 
-    def test_check_unused_access_keys_flags_never_used_and_stale_keys(self):
+    def test_check_unused_access_keys_flags_never_used_and_stale_keys_account_wide(self):
+        """Regression test: this check used to only look at the CALLING
+        identity's own keys - it never saw other IAM users' keys at all,
+        even ones created specifically to test this check."""
         from datetime import datetime, timedelta, timezone
         from scans.iam import check_unused_access_keys
 
-        sts = Mock()
-        sts.get_caller_identity.return_value = {"Arn": "arn:aws:iam::123456789012:user/alice"}
-        iam = Mock()
-        iam.list_access_keys.return_value = {
-            "AccessKeyMetadata": [
-                {"AccessKeyId": "AKIA_NEVER_USED", "Status": "Active"},
-                {"AccessKeyId": "AKIA_STALE", "Status": "Active"},
-                {"AccessKeyId": "AKIA_RECENT", "Status": "Active"},
-            ]
-        }
+        iam = Mock(spec=["list_users", "list_access_keys", "get_access_key_last_used"])
+        iam.list_users.return_value = {"Users": [{"UserName": "alice"}, {"UserName": "bob"}]}
+
+        def fake_list_keys(UserName):
+            if UserName == "alice":
+                return {"AccessKeyMetadata": [
+                    {"AccessKeyId": "AKIA_NEVER_USED", "Status": "Active"},
+                    {"AccessKeyId": "AKIA_STALE", "Status": "Active"},
+                ]}
+            return {"AccessKeyMetadata": [{"AccessKeyId": "AKIA_RECENT", "Status": "Active"}]}
+
+        iam.list_access_keys.side_effect = fake_list_keys
 
         def fake_last_used(AccessKeyId):
             if AccessKeyId == "AKIA_NEVER_USED":
@@ -214,24 +219,52 @@ class WorkerTests(unittest.TestCase):
 
         iam.get_access_key_last_used.side_effect = fake_last_used
 
-        findings = check_unused_access_keys(iam, sts)
+        findings = check_unused_access_keys(iam)
         flagged = {f["resource"] for f in findings}
 
-        self.assertIn("AKIA_NEVER_USED", flagged)
+        self.assertIn("AKIA_NEVER_USED", flagged)  # alice's key, not the caller's
         self.assertIn("AKIA_STALE", flagged)
-        self.assertNotIn("AKIA_RECENT", flagged)
+        self.assertNotIn("AKIA_RECENT", flagged)  # bob's key is recent - not flagged
 
-    def test_check_unused_access_keys_skips_non_iam_callers(self):
+    def test_check_unused_access_keys_handles_no_users(self):
         from scans.iam import check_unused_access_keys
 
-        sts = Mock()
-        sts.get_caller_identity.return_value = {"Arn": "arn:aws:sts::123456789012:assumed-role/Foo/session"}
-        iam = Mock()
+        iam = Mock(spec=["list_users"])
+        iam.list_users.return_value = {"Users": []}
 
-        findings = check_unused_access_keys(iam, sts)
+        findings = check_unused_access_keys(iam)
 
         self.assertEqual(findings, [])
-        iam.list_access_keys.assert_not_called()
+
+    def test_list_users_without_mfa_flags_only_users_lacking_a_device(self):
+        from scans.iam import list_users_without_mfa
+
+        iam = Mock(spec=["list_users", "list_mfa_devices"])
+        iam.list_users.return_value = {"Users": [{"UserName": "alice"}, {"UserName": "bob"}]}
+
+        def fake_mfa_devices(UserName):
+            if UserName == "alice":
+                return {"MFADevices": []}  # no MFA - should be flagged
+            return {"MFADevices": [{"SerialNumber": "arn:..."}]}  # has MFA
+
+        iam.list_mfa_devices.side_effect = fake_mfa_devices
+
+        findings = list_users_without_mfa(iam)
+
+        self.assertEqual(len(findings), 1)
+        self.assertEqual(findings[0]["resource"], "alice")
+        self.assertEqual(findings[0]["severity"], "critical")
+
+    def test_list_users_without_mfa_returns_empty_when_everyone_has_mfa(self):
+        from scans.iam import list_users_without_mfa
+
+        iam = Mock(spec=["list_users", "list_mfa_devices"])
+        iam.list_users.return_value = {"Users": [{"UserName": "alice"}]}
+        iam.list_mfa_devices.return_value = {"MFADevices": [{"SerialNumber": "arn:..."}]}
+
+        findings = list_users_without_mfa(iam)
+
+        self.assertEqual(findings, [])
 
     def test_list_public_rds_instances_flags_publicly_accessible(self):
         from scans.rds import list_public_rds_instances

@@ -13,9 +13,9 @@ Cloud-Sentinel demonstrates production-style backend engineering concepts includ
 * Detect public S3 buckets
 * Verify S3 bucket encryption
 * Detect security groups open to `0.0.0.0/0`
-* Check IAM user MFA
+* Check IAM user MFA (both the scanning identity and account-wide, every IAM user)
 * Verify root account MFA
-* Flag unused or stale IAM access keys
+* Flag unused or stale IAM access keys (account-wide, every IAM user)
 * List running EC2 instances
 * Detect publicly accessible RDS instances
 * Verify RDS storage encryption

@@ -24,6 +24,39 @@ def check_mfa_for_current_user(iam_client, sts_client):
     }
 
 
+def _list_all_users(iam_client):
+    users = []
+    if hasattr(iam_client, "get_paginator"):
+        paginator = iam_client.get_paginator("list_users")
+        for page in paginator.paginate():
+            users.extend(page.get("Users", []))
+    else:
+        users = iam_client.list_users().get("Users", [])
+    return users
+
+
+def list_users_without_mfa(iam_client):
+    """Account-wide MFA check: flags every IAM user without an MFA device,
+    not just the identity that happens to be running the scan. Complements
+    check_mfa_for_current_user, which only tells you about the scanner's
+    own credentials."""
+    findings = []
+
+    for user in _list_all_users(iam_client):
+        user_name = user.get("UserName")
+        devices = iam_client.list_mfa_devices(UserName=user_name).get("MFADevices", [])
+
+        if len(devices) == 0:
+            findings.append({
+                "type": "IAMUserMFA",
+                "resource": user_name,
+                "severity": "critical",
+                "details": f"IAM user '{user_name}' does not have MFA enabled",
+            })
+
+    return findings
+
+
 def check_root_mfa_enabled(iam_client, sts_client):
     findings = []
 
@@ -42,46 +75,43 @@ def check_root_mfa_enabled(iam_client, sts_client):
     return findings
 
 
-def check_unused_access_keys(iam_client, sts_client, unused_after_days=90):
-    """Flags IAM access keys that have never been used, or haven't been used
-    in `unused_after_days` days. Stale keys are a common lateral-movement
-    target since they're often forgotten but still valid."""
+def check_unused_access_keys(iam_client, unused_after_days=90):
+    """Account-wide: flags access keys that have never been used, or
+    haven't been used in `unused_after_days` days, across EVERY IAM user -
+    not just whichever identity happens to be running the scan. Stale keys
+    are a common lateral-movement target since they're often forgotten but
+    still valid."""
     from datetime import datetime, timezone
 
     findings = []
 
-    caller = sts_client.get_caller_identity()
-    arn = caller.get("Arn", "")
-    if ":user/" not in arn:
-        return findings
+    for user in _list_all_users(iam_client):
+        user_name = user.get("UserName")
+        keys = iam_client.list_access_keys(UserName=user_name).get("AccessKeyMetadata", [])
 
-    user_name = arn.split("/", 1)[1]
+        for key in keys:
+            key_id = key.get("AccessKeyId")
+            status = key.get("Status")
 
-    keys = iam_client.list_access_keys(UserName=user_name).get("AccessKeyMetadata", [])
+            last_used_resp = iam_client.get_access_key_last_used(AccessKeyId=key_id)
+            last_used = last_used_resp.get("AccessKeyLastUsed", {}).get("LastUsedDate")
 
-    for key in keys:
-        key_id = key.get("AccessKeyId")
-        status = key.get("Status")
+            if last_used is None:
+                findings.append({
+                    "type": "IAMUnusedAccessKey",
+                    "resource": key_id,
+                    "severity": "medium",
+                    "details": f"Key for user '{user_name}' has never been used (status: {status})",
+                })
+                continue
 
-        last_used_resp = iam_client.get_access_key_last_used(AccessKeyId=key_id)
-        last_used = last_used_resp.get("AccessKeyLastUsed", {}).get("LastUsedDate")
-
-        if last_used is None:
-            findings.append({
-                "type": "IAMUnusedAccessKey",
-                "resource": key_id,
-                "severity": "medium",
-                "details": f"Key for user '{user_name}' has never been used (status: {status})",
-            })
-            continue
-
-        age_days = (datetime.now(timezone.utc) - last_used).days
-        if age_days >= unused_after_days:
-            findings.append({
-                "type": "IAMUnusedAccessKey",
-                "resource": key_id,
-                "severity": "medium",
-                "details": f"Key for user '{user_name}' last used {age_days} days ago (status: {status})",
-            })
+            age_days = (datetime.now(timezone.utc) - last_used).days
+            if age_days >= unused_after_days:
+                findings.append({
+                    "type": "IAMUnusedAccessKey",
+                    "resource": key_id,
+                    "severity": "medium",
+                    "details": f"Key for user '{user_name}' last used {age_days} days ago (status: {status})",
+                })
 
     return findings
