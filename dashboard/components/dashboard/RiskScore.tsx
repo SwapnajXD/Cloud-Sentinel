@@ -25,7 +25,7 @@ export default function RiskScore({
   const color = GRADE_COLOR[grade] || "var(--slate)";
 
   return (
-    <div className="rounded-xl2 border border-line bg-panel p-6 flex flex-col sm:flex-row gap-6 sm:items-center">
+    <div className="rounded-xl2 border border-grid bg-panel p-6 flex flex-col sm:flex-row gap-6 sm:items-center">
       <div className="flex items-center gap-4 shrink-0">
         <div
           className="relative flex items-center justify-center rounded-full shrink-0"
@@ -42,7 +42,7 @@ export default function RiskScore({
           </div>
         </div>
         <div>
-          <p className="text-xs uppercase tracking-wider text-slate font-medium mb-1">
+          <p className="text-xs uppercase tracking-wider text-haze font-medium mb-1">
             Security Score
           </p>
           <p className="display text-3xl font-bold" style={{ color }}>
@@ -52,8 +52,8 @@ export default function RiskScore({
       </div>
 
       {cisSummary && cisSummary.controls_assessed > 0 && (
-        <div className="sm:border-l sm:border-line sm:pl-6 flex-1 min-w-0">
-          <p className="text-xs uppercase tracking-wider text-slate font-medium mb-1.5">
+        <div className="sm:border-l sm:border-grid sm:pl-6 flex-1 min-w-0">
+          <p className="text-xs uppercase tracking-wider text-haze font-medium mb-1.5">
             Compliance
           </p>
           <p className="text-sm text-mist mb-2">{cisSummary.version}</p>
@@ -66,7 +66,7 @@ export default function RiskScore({
                 }}
               />
             </div>
-            <span className="text-xs text-slate whitespace-nowrap">
+            <span className="text-xs text-haze whitespace-nowrap">
               {cisSummary.controls_passing}/{cisSummary.controls_assessed} controls passing
             </span>
           </div>

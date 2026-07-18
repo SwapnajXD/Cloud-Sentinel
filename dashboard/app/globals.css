@@ -3,31 +3,31 @@
 @tailwind utilities;
 
 /*
-  Cloud-Sentinel — "watchtower" theme.
-  One considered dark console, not a light/dark toggle: the sweep + beacon
-  signature depends on a dark field to read, and a security console being
-  dark by default is itself the right call for this product.
+  Cloud-Sentinel — "Threat Scope" theme.
+  A radar/sonar operations console: findings are blips on an actual scope,
+  not just a list next to a decorative animation. One dark console, not a
+  light/dark toggle — the scope depends on a dark field to read.
 */
 :root {
-  --ink: #0f1621;       /* canvas */
-  --panel: #161f2e;     /* card surface */
-  --panel-2: #1c273a;   /* raised surface: inputs, hovered rows */
-  --line: #29354a;      /* hairline borders */
-  --mist: #e8edf6;      /* primary text */
-  --slate: #8291a8;     /* muted text */
+  --abyss: #0a0f16;       /* canvas */
+  --panel: #121a24;       /* card surface */
+  --panel-2: #182230;     /* raised surface: inputs, hovered rows */
+  --grid: #23303f;        /* hairline borders, scope rings */
+  --mist: #e8f0f5;        /* primary text */
+  --haze: #7891a0;        /* muted text */
 
-  --brass: #c99a44;     /* brand accent: primary actions, focus, the sweep */
-  --brass-soft: rgba(201, 154, 68, 0.14);
+  --signal: #3fc7c0;      /* scope trace: sweep line, active blips, focus, brand */
+  --signal-soft: rgba(63, 199, 192, 0.14);
 
-  --critical: #e1555c;
-  --medium: #db8a3e;
-  --low: #4f8fd1;
-  --good: #3fae79;
+  --critical: #f0525c;
+  --medium: #e8963d;
+  --low: #6c7fe0;
+  --good: #3fbf83;
 }
 
 @layer base {
   html, body {
-    background-color: var(--ink);
+    background-color: var(--abyss);
     color: var(--mist);
     font-family: var(--font-sans), sans-serif;
     scroll-behavior: smooth;
@@ -37,7 +37,7 @@
 
   h1, h2, h3, .display {
     font-family: var(--font-display), sans-serif;
-    letter-spacing: -0.01em;
+    letter-spacing: 0.01em;
   }
 
   code, .mono {
@@ -45,29 +45,27 @@
   }
 
   ::selection {
-    background: var(--brass-soft);
+    background: var(--signal-soft);
     color: var(--mist);
   }
 
-  /* Visible keyboard focus everywhere - no outline-none without a replacement */
   :focus-visible {
-    outline: 2px solid var(--brass);
+    outline: 2px solid var(--signal);
     outline-offset: 2px;
   }
 }
 
 @layer utilities {
   .dot-grid {
-    background-image: radial-gradient(var(--line) 1px, transparent 1px);
+    background-image: radial-gradient(var(--grid) 1px, transparent 1px);
     background-size: 22px 22px;
   }
 }
 
 /* ---------------------------------------------------------------
-   Signature element: the Sweep.
-   A slow radar/sonar sweep — Cloud-Sentinel "standing watch". Used
-   ambiently on the login screen and literally as the scan-in-progress
-   indicator on the dashboard. Kept to those two moments only.
+   Signature element: the Scope.
+   A rotating sweep over a radar field — used ambiently on login, and as
+   the literal sweep inside the dashboard's Threat Scope visualization.
 --------------------------------------------------------------- */
 @keyframes sentinel-rotate {
   from { transform: rotate(0deg); }
@@ -77,6 +75,11 @@
 @keyframes sentinel-ping {
   0% { transform: scale(1); opacity: 0.5; }
   100% { transform: scale(2.6); opacity: 0; }
+}
+
+@keyframes blip-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.55; }
 }
 
 .sentinel-sweep {
@@ -91,9 +94,14 @@
   animation: sentinel-ping 2s cubic-bezier(0, 0, 0.2, 1) infinite;
 }
 
+.blip-critical {
+  animation: blip-pulse 1.8s ease-in-out infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .sentinel-sweep,
-  .sentinel-ping {
+  .sentinel-ping,
+  .blip-critical {
     animation: none;
   }
 }

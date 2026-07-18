@@ -25,12 +25,12 @@ export default function SummaryStats({ findings }: { findings: any[] }) {
   const total = findings.length || 1;
 
   return (
-    <div className="rounded-xl2 border border-line bg-panel p-6">
+    <div className="rounded-xl2 border border-grid bg-panel p-6">
       <div className="flex items-baseline justify-between mb-4">
-        <span className="text-xs uppercase tracking-wider text-slate font-medium">
+        <span className="text-xs uppercase tracking-wider text-haze font-medium">
           Latest scan
         </span>
-        <span className="text-sm text-slate">
+        <span className="text-sm text-haze">
           {findings.length} finding{findings.length === 1 ? "" : "s"}
         </span>
       </div>
@@ -58,7 +58,7 @@ export default function SummaryStats({ findings }: { findings: any[] }) {
                 className="h-1.5 w-1.5 rounded-full"
                 style={{ backgroundColor: COLOR[sev] }}
               />
-              <span className="text-xs text-slate">{LABEL[sev]}</span>
+              <span className="text-xs text-haze">{LABEL[sev]}</span>
             </div>
             <span className="text-2xl font-bold display">{counts[sev]}</span>
           </div>

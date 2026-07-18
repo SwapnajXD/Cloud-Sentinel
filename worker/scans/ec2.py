@@ -12,6 +12,9 @@ def list_running_ec2_instances(ec2_client):
                 "state": instance.get("State", {}).get("Name"),
                 "type": instance.get("InstanceType"),
                 "public_ip": instance.get("PublicIpAddress"),
+                "security_groups": [
+                    sg.get("GroupId") for sg in instance.get("SecurityGroups", [])
+                ],
             })
 
     return instances

@@ -662,6 +662,229 @@ class WorkerTests(unittest.TestCase):
         many_criticals = [{"severity": "critical"}] * 20  # way more than 100 penalty
         self.assertEqual(compute_risk_score(many_criticals), 0)
 
+    def test_correlation_verified_remote_access_requires_matching_sg_and_public_ip(self):
+        from services.correlation import find_compound_risks
+
+        findings = [
+            {"type": "SecurityGroupOpen", "resource": "sg-1", "title": "Sensitive service exposed: SSH (22)"},
+            {"type": "EC2Instance", "resource": "i-1", "security_groups": ["sg-1"], "public_ip": "1.2.3.4"},
+        ]
+        compounds = find_compound_risks(findings)
+        types = [c["type"] for c in compounds]
+        self.assertIn("CompoundVerifiedRemoteAccess", types)
+
+    def test_correlation_no_compound_without_public_ip(self):
+        from services.correlation import find_compound_risks
+
+        findings = [
+            {"type": "SecurityGroupOpen", "resource": "sg-1", "title": "Sensitive service exposed: SSH (22)"},
+            {"type": "EC2Instance", "resource": "i-1", "security_groups": ["sg-1"], "public_ip": None},
+        ]
+        compounds = find_compound_risks(findings)
+        self.assertEqual(compounds, [])
+
+    def test_correlation_no_mfa_anywhere(self):
+        from services.correlation import find_compound_risks
+
+        findings = [
+            {"type": "RootMFA", "resource": "123456789012", "severity": "critical"},
+            {"type": "IAMUserMFA", "resource": "alice", "severity": "critical"},
+        ]
+        compounds = find_compound_risks(findings)
+        types = [c["type"] for c in compounds]
+        self.assertIn("CompoundNoMFAAnywhere", types)
+
+    def test_correlation_skips_no_mfa_anywhere_when_root_mfa_passes(self):
+        from services.correlation import find_compound_risks
+
+        findings = [
+            {"type": "RootMFA", "resource": "123456789012", "severity": "good"},
+            {"type": "IAMUserMFA", "resource": "alice", "severity": "critical"},
+        ]
+        compounds = find_compound_risks(findings)
+        types = [c["type"] for c in compounds]
+        self.assertNotIn("CompoundNoMFAAnywhere", types)
+
+    def test_correlation_stale_key_without_mfa_matches_username_from_details(self):
+        from services.correlation import find_compound_risks
+
+        findings = [
+            {"type": "IAMUnusedAccessKey", "resource": "AKIA123", "details": "Key for user 'alice' has never been used (status: Active)"},
+            {"type": "IAMUserMFA", "resource": "alice", "severity": "critical"},
+        ]
+        compounds = find_compound_risks(findings)
+        types = [c["type"] for c in compounds]
+        self.assertIn("CompoundStaleKeyNoMFA", types)
+
+    def test_correlation_s3_public_and_unencrypted(self):
+        from services.correlation import find_compound_risks
+
+        findings = [
+            {"type": "S3PublicAccess", "resource": "my-bucket"},
+            {"type": "S3Encryption", "resource": "my-bucket", "severity": "critical"},
+        ]
+        compounds = find_compound_risks(findings)
+        types = [c["type"] for c in compounds]
+        self.assertIn("CompoundS3PublicAccessAndS3Encryption", types)
+
+    def test_correlation_lambda_public_and_deprecated(self):
+        from services.correlation import find_compound_risks
+
+        findings = [
+            {"type": "LambdaPublicFunctionURL", "resource": "my-fn"},
+            {"type": "LambdaDeprecatedRuntime", "resource": "my-fn"},
+        ]
+        compounds = find_compound_risks(findings)
+        types = [c["type"] for c in compounds]
+        self.assertIn("CompoundLambdaExposedAndOutdated", types)
+
+    def test_correlation_every_compound_finding_lists_its_sources(self):
+        """Nothing here should be a black box - every compound finding must
+        trace back to the specific findings it was built from."""
+        from services.correlation import find_compound_risks
+
+        findings = [
+            {"type": "RootMFA", "resource": "123456789012", "severity": "critical"},
+            {"type": "IAMUserMFA", "resource": "alice", "severity": "critical"},
+        ]
+        compounds = find_compound_risks(findings)
+        for c in compounds:
+            self.assertIn("correlates", c)
+            self.assertTrue(len(c["correlates"]) >= 1)
+
+    def test_diff_marks_new_findings_when_no_previous_scan(self):
+        from services.diffing import compute_diff
+
+        current = [{"type": "S3PublicAccess", "resource": "bucket-a"}]
+        diff = compute_diff(current, None)
+
+        self.assertFalse(diff["has_previous_scan"])
+        self.assertEqual(diff["new_count"], 0)
+        self.assertFalse(current[0]["is_new"])  # nothing to compare against yet
+
+    def test_diff_detects_new_and_resolved_findings(self):
+        from services.diffing import compute_diff
+
+        previous = [
+            {"type": "S3PublicAccess", "resource": "bucket-a"},
+            {"type": "SecurityGroupOpen", "resource": "sg-1"},
+        ]
+        current = [
+            {"type": "S3PublicAccess", "resource": "bucket-a"},  # persisting
+            {"type": "IAMUserMFA", "resource": "alice"},  # new
+        ]
+
+        diff = compute_diff(current, previous)
+
+        self.assertTrue(diff["has_previous_scan"])
+        self.assertEqual(diff["new_count"], 1)
+        self.assertEqual(diff["resolved_count"], 1)  # sg-1 finding is gone
+        self.assertEqual(diff["persisting_count"], 1)  # bucket-a persists
+        self.assertFalse(current[0]["is_new"])
+        self.assertTrue(current[1]["is_new"])
+
+    def test_correlation_verified_remote_access(self):
+        from services.correlation import find_compound_risks
+
+        findings = [
+            {"type": "SecurityGroupOpen", "resource": "sg-1", "title": "Sensitive service exposed: SSH (22)"},
+            {"type": "EC2Instance", "resource": "i-1", "security_groups": ["sg-1"], "public_ip": "1.2.3.4"},
+        ]
+        compounds = find_compound_risks(findings)
+
+        self.assertEqual(len(compounds), 1)
+        self.assertEqual(compounds[0]["type"], "CompoundVerifiedRemoteAccess")
+        self.assertEqual(compounds[0]["severity"], "critical")
+
+    def test_correlation_skips_when_sg_not_attached_to_any_instance(self):
+        from services.correlation import find_compound_risks
+
+        findings = [
+            {"type": "SecurityGroupOpen", "resource": "sg-1", "title": "Sensitive service exposed: SSH (22)"},
+            {"type": "EC2Instance", "resource": "i-1", "security_groups": ["sg-2"], "public_ip": "1.2.3.4"},
+        ]
+        self.assertEqual(find_compound_risks(findings), [])
+
+    def test_correlation_no_mfa_anywhere_requires_both_root_and_user(self):
+        from services.correlation import find_compound_risks
+
+        root_only = [{"type": "RootMFA", "resource": "123", "severity": "critical"}]
+        self.assertEqual(find_compound_risks(root_only), [])
+
+        both = root_only + [{"type": "IAMUserMFA", "resource": "alice", "severity": "critical"}]
+        compounds = find_compound_risks(both)
+        self.assertEqual(len(compounds), 1)
+        self.assertEqual(compounds[0]["type"], "CompoundNoMFAAnywhere")
+
+    def test_correlation_stale_key_without_mfa(self):
+        from services.correlation import find_compound_risks
+
+        findings = [
+            {"type": "IAMUnusedAccessKey", "resource": "AKIA123", "severity": "medium",
+             "details": "Key for user 'alice' has never been used (status: Active)"},
+            {"type": "IAMUserMFA", "resource": "alice", "severity": "critical"},
+        ]
+        compounds = find_compound_risks(findings)
+
+        self.assertEqual(len(compounds), 1)
+        self.assertEqual(compounds[0]["type"], "CompoundStaleKeyNoMFA")
+        self.assertEqual(compounds[0]["resource"], "alice")
+
+    def test_correlation_s3_public_and_unencrypted(self):
+        from services.correlation import find_compound_risks
+
+        findings = [
+            {"type": "S3PublicAccess", "resource": "my-bucket", "severity": "critical"},
+            {"type": "S3Encryption", "resource": "my-bucket", "severity": "critical"},
+        ]
+        compounds = find_compound_risks(findings)
+
+        self.assertEqual(len(compounds), 1)
+        self.assertIn("my-bucket", compounds[0]["resource"])
+
+    def test_correlation_lambda_public_and_deprecated(self):
+        from services.correlation import find_compound_risks
+
+        findings = [
+            {"type": "LambdaPublicFunctionURL", "resource": "my-fn", "severity": "critical"},
+            {"type": "LambdaDeprecatedRuntime", "resource": "my-fn", "severity": "medium"},
+        ]
+        compounds = find_compound_risks(findings)
+
+        self.assertEqual(len(compounds), 1)
+        self.assertEqual(compounds[0]["type"], "CompoundLambdaExposedAndOutdated")
+
+    def test_diff_first_scan_has_no_previous(self):
+        from services.diffing import compute_diff
+
+        current = [{"type": "S3PublicAccess", "resource": "b1"}]
+        result = compute_diff(current, None)
+
+        self.assertFalse(result["has_previous_scan"])
+        self.assertFalse(current[0]["is_new"])
+        self.assertEqual(result["persisting_count"], 1)
+
+    def test_diff_detects_new_and_resolved_findings(self):
+        from services.diffing import compute_diff
+
+        previous = [
+            {"type": "S3PublicAccess", "resource": "b1"},
+            {"type": "SecurityGroupOpen", "resource": "sg-1"},
+        ]
+        current = [
+            {"type": "S3PublicAccess", "resource": "b1"},  # persists
+            {"type": "IAMUnusedAccessKey", "resource": "AKIA1"},  # new
+        ]
+
+        result = compute_diff(current, previous)
+
+        self.assertTrue(result["has_previous_scan"])
+        self.assertEqual(result["new_count"], 1)
+        self.assertEqual(result["resolved_count"], 1)  # SecurityGroupOpen sg-1 is gone
+        self.assertEqual(result["persisting_count"], 1)
+        self.assertFalse(current[0]["is_new"])
+        self.assertTrue(current[1]["is_new"])
+
 
 if __name__ == "__main__":
     unittest.main()

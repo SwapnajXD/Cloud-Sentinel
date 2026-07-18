@@ -32,9 +32,9 @@ export default function AiSummary({ report, token }: { report: any; token: strin
   }
 
   return (
-    <div className="rounded-xl2 border border-line bg-panel p-5">
+    <div className="rounded-xl2 border border-grid bg-panel p-5">
       <div className="flex items-center justify-between gap-4">
-        <span className="text-xs uppercase tracking-wider text-slate font-medium">
+        <span className="text-xs uppercase tracking-wider text-haze font-medium">
           AI summary
         </span>
         <Button variant="secondary" onClick={handleGenerate} disabled={loading}>
@@ -47,7 +47,7 @@ export default function AiSummary({ report, token }: { report: any; token: strin
         <p className="text-sm text-mist mt-3 leading-relaxed whitespace-pre-wrap">{summary}</p>
       )}
       {!summary && !error && (
-        <p className="text-sm text-slate mt-3">
+        <p className="text-sm text-haze mt-3">
           Get a plain-language summary of this scan&rsquo;s findings.
         </p>
       )}

@@ -30,7 +30,7 @@ export default function LoginPage() {
         className="absolute inset-0 pointer-events-none"
         style={{
           background:
-            "radial-gradient(circle at 30% 45%, rgba(201,154,68,0.08), transparent 55%)",
+            "radial-gradient(circle at 30% 45%, rgba(63,199,192,0.08), transparent 55%)",
         }}
       />
 
@@ -38,13 +38,13 @@ export default function LoginPage() {
         <div className="relative flex items-center justify-center lg:justify-start shrink-0">
           <RadarSweep size={280} />
           <div className="absolute max-w-[220px] text-left">
-            <p className="text-xs uppercase tracking-[0.2em] text-brass mb-3">
+            <p className="text-xs uppercase tracking-[0.2em] text-signal mb-3">
               Cloud-Sentinel
             </p>
             <h1 className="display text-3xl font-bold text-mist leading-tight mb-3">
               Standing watch over your AWS perimeter.
             </h1>
-            <p className="text-sm text-slate leading-relaxed">
+            <p className="text-sm text-haze leading-relaxed">
               Sign in to run a scan and see exactly what&rsquo;s exposed.
             </p>
           </div>

@@ -164,6 +164,20 @@ def save_audit_report(conn, task, report):
     return report_id
 
 
+def get_latest_report(conn, user_id):
+    """Returns the user's most recent report (already-parsed JSONB dict),
+    or None if they have no prior scans. Called before a new scan runs, so
+    "most recent" naturally means "the one before this one" - no
+    special-casing needed."""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT report FROM audit_reports WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
+            (user_id,),
+        )
+        row = cursor.fetchone()
+    return row[0] if row else None
+
+
 # =========================
 # ✅ Task processing
 # =========================
@@ -191,7 +205,8 @@ def process_task(task, conn=None, aws_clients=None):
         ensure_schema(conn)
         update_task_status(conn, task_id, "running")
 
-        report = build_audit_report(task, aws_clients, mode=mode)
+        previous_report = get_latest_report(conn, task["user_id"])
+        report = build_audit_report(task, aws_clients, mode=mode, previous_report=previous_report)
 
         findings = report.get("findings", []) if isinstance(report, dict) else []
         print(f"[FINDINGS] count={len(findings)}")

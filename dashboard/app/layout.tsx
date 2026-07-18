@@ -1,6 +1,26 @@
 import type { Metadata } from "next";
+import { Rajdhani, Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/lib/auth-context";
+
+const rajdhani = Rajdhani({
+  weight: ["500", "600", "700"],
+  subsets: ["latin"],
+  variable: "--font-display",
+  display: "swap",
+});
+
+const inter = Inter({
+  subsets: ["latin"],
+  variable: "--font-sans",
+  display: "swap",
+});
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
+  display: "swap",
+});
 
 export const metadata: Metadata = {
   title: "Cloud-Sentinel",
@@ -13,8 +33,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className="dark">
-      <body className="antialiased bg-ink text-mist">
+    <html
+      lang="en"
+      className={`${rajdhani.variable} ${inter.variable} ${jetbrainsMono.variable} dark`}
+    >
+      <body className="antialiased bg-abyss text-mist">
         <AuthProvider>{children}</AuthProvider>
       </body>
     </html>

@@ -12,8 +12,8 @@ export default function ScanHistory({
   if (reports.length <= 1) return null;
 
   return (
-    <div className="rounded-xl2 border border-line bg-panel p-4">
-      <p className="text-xs uppercase tracking-wider text-slate font-medium mb-3 px-1">
+    <div className="rounded-xl2 border border-grid bg-panel p-4">
+      <p className="text-xs uppercase tracking-wider text-haze font-medium mb-3 px-1">
         Scan history
       </p>
       <div className="space-y-1 max-h-80 overflow-y-auto">
@@ -29,7 +29,7 @@ export default function ScanHistory({
               className={`w-full text-left px-3 py-2.5 rounded-lg text-sm transition ${
                 i === selected
                   ? "bg-panel2 text-mist"
-                  : "text-slate hover:bg-panel2/60"
+                  : "text-haze hover:bg-panel2/60"
               }`}
             >
               <div className="flex items-center justify-between gap-2">
@@ -42,7 +42,7 @@ export default function ScanHistory({
                   </span>
                 )}
               </div>
-              <span className="text-xs text-slate">
+              <span className="text-xs text-haze">
                 {count} finding{count === 1 ? "" : "s"}
               </span>
             </button>

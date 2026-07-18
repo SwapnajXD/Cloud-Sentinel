@@ -48,8 +48,8 @@ export default function ScheduleManager({
   }
 
   return (
-    <div className="rounded-xl2 border border-line bg-panel p-4">
-      <p className="text-xs uppercase tracking-wider text-slate font-medium mb-3 px-1">
+    <div className="rounded-xl2 border border-grid bg-panel p-4">
+      <p className="text-xs uppercase tracking-wider text-haze font-medium mb-3 px-1">
         Recurring scans
       </p>
 
@@ -58,18 +58,18 @@ export default function ScheduleManager({
           {schedules.map((s) => (
             <div
               key={s.id}
-              className="flex items-center justify-between gap-2 rounded-lg bg-panel2 border border-line px-3 py-2 text-xs"
+              className="flex items-center justify-between gap-2 rounded-lg bg-panel2 border border-grid px-3 py-2 text-xs"
             >
               <div>
                 <span className="mono uppercase text-mist">{s.mode}</span>
-                <span className="text-slate"> · every {s.interval_hours}h</span>
-                <p className="text-slate mt-0.5">
+                <span className="text-haze"> · every {s.interval_hours}h</span>
+                <p className="text-haze mt-0.5">
                   Next: {new Date(s.next_run_at).toLocaleString()}
                 </p>
               </div>
               <button
                 onClick={() => handleDelete(s.id)}
-                className="text-slate hover:text-critical transition shrink-0"
+                className="text-haze hover:text-critical transition shrink-0"
                 aria-label="Delete schedule"
               >
                 ✕
@@ -87,8 +87,8 @@ export default function ScheduleManager({
               onClick={() => setMode(m)}
               className={`flex-1 px-2 py-1.5 rounded-md text-xs font-medium border transition ${
                 mode === m
-                  ? "bg-panel2 border-slate text-mist"
-                  : "border-line text-slate hover:text-mist"
+                  ? "bg-panel2 border-haze text-mist"
+                  : "border-grid text-haze hover:text-mist"
               }`}
             >
               {m.toUpperCase()}
@@ -103,8 +103,8 @@ export default function ScheduleManager({
               onClick={() => setHours(p.hours)}
               className={`px-2.5 py-1 rounded-full text-xs border transition ${
                 hours === p.hours
-                  ? "bg-brass/15 border-brass/40 text-brass"
-                  : "border-line text-slate hover:text-mist"
+                  ? "bg-signal/15 border-signal/40 text-signal"
+                  : "border-grid text-haze hover:text-mist"
               }`}
             >
               {p.label}

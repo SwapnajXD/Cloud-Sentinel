@@ -4,13 +4,13 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        ink: "var(--ink)",
+        abyss: "var(--abyss)",
         panel: "var(--panel)",
         panel2: "var(--panel-2)",
-        line: "var(--line)",
+        grid: "var(--grid)",
         mist: "var(--mist)",
-        slate: "var(--slate)",
-        brass: "var(--brass)",
+        haze: "var(--haze)",
+        signal: "var(--signal)",
         critical: "var(--critical)",
         medium: "var(--medium)",
         low: "var(--low)",

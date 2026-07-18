@@ -41,7 +41,7 @@ export default function DeleteAccountModal({
         onClick={(e) => e.stopPropagation()}
       >
         <h2 className="display text-lg font-bold text-mist mb-2">Delete account</h2>
-        <p className="text-sm text-slate mb-4">
+        <p className="text-sm text-haze mb-4">
           This permanently deletes your account and every scan report you have. This
           can&rsquo;t be undone.
         </p>
@@ -52,7 +52,7 @@ export default function DeleteAccountModal({
           value={password}
           onChange={(e) => setPassword(e.target.value)}
           placeholder="Confirm your password"
-          className="w-full rounded-lg bg-panel2 border border-line px-3 py-2.5 text-sm text-mist placeholder:text-slate/60 focus:border-critical outline-none transition mb-3"
+          className="w-full rounded-lg bg-panel2 border border-grid px-3 py-2.5 text-sm text-mist placeholder:text-haze/60 focus:border-critical outline-none transition mb-3"
         />
 
         {error && <p className="text-sm text-critical mb-3">{error}</p>}

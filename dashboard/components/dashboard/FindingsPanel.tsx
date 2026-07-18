@@ -5,6 +5,8 @@ import SummaryStats from "@/components/dashboard/SummaryStats";
 import RiskScore from "@/components/dashboard/RiskScore";
 import FindingsList from "@/components/dashboard/FindingsList";
 import AiSummary from "@/components/dashboard/AiSummary";
+import DiffSummary from "@/components/dashboard/DiffSummary";
+import ThreatScope from "@/components/scope/ThreatScope";
 
 const SEVERITIES = ["all", "critical", "medium", "low", "good"] as const;
 type SeverityFilter = (typeof SEVERITIES)[number];
@@ -25,8 +27,10 @@ export default function FindingsPanel({
   token: string;
 }) {
   const findings = report?.report?.findings || [];
+  const diff = report?.report?.diff;
   const [severityFilter, setSeverityFilter] = useState<SeverityFilter>("all");
   const [query, setQuery] = useState("");
+  const [selected, setSelected] = useState<{ type: string; resource: string } | null>(null);
 
   const filtered = useMemo(() => {
     return findings.filter((f: any) => {
@@ -42,16 +46,24 @@ export default function FindingsPanel({
 
   return (
     <div className="space-y-6 min-w-0">
-      {typeof report?.report?.risk_score === "number" && (
-        <RiskScore
-          score={report.report.risk_score}
-          grade={report.report.risk_grade}
-          cisSummary={report.report.cis_summary}
-        />
-      )}
+      <DiffSummary diff={diff} />
 
-      {/* Summary always reflects ALL findings, independent of the filters below */}
-      <SummaryStats findings={findings} />
+      <div className="grid md:grid-cols-[minmax(0,260px)_1fr] gap-6 items-start">
+        <div className="rounded-xl2 border border-grid bg-panel p-4">
+          <ThreatScope findings={findings} onSelect={(f) => setSelected({ type: f.type, resource: f.resource })} />
+        </div>
+        <div className="space-y-6">
+          {typeof report?.report?.risk_score === "number" && (
+            <RiskScore
+              score={report.report.risk_score}
+              grade={report.report.risk_grade}
+              cisSummary={report.report.cis_summary}
+            />
+          )}
+          {/* Summary always reflects ALL findings, independent of the filters below */}
+          <SummaryStats findings={findings} />
+        </div>
+      </div>
 
       <AiSummary report={report} token={token} />
 
@@ -63,8 +75,8 @@ export default function FindingsPanel({
               onClick={() => setSeverityFilter(s)}
               className={`px-3 py-1.5 rounded-full text-xs font-medium border transition ${
                 severityFilter === s
-                  ? "bg-panel2 border-slate text-mist"
-                  : "border-line text-slate hover:text-mist"
+                  ? "bg-panel2 border-haze text-mist"
+                  : "border-grid text-haze hover:text-mist"
               }`}
             >
               {LABEL[s]}
@@ -75,16 +87,16 @@ export default function FindingsPanel({
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search findings…"
-          className="rounded-lg bg-panel2 border border-line px-3 py-2 text-sm text-mist placeholder:text-slate/60 focus:border-brass outline-none transition sm:w-56"
+          className="rounded-lg bg-panel2 border border-grid px-3 py-2 text-sm text-mist placeholder:text-haze/60 focus:border-signal outline-none transition sm:w-56"
         />
       </div>
 
       {filtered.length === 0 ? (
-        <div className="rounded-xl2 border border-line bg-panel p-8 text-center text-sm text-slate">
+        <div className="rounded-xl2 border border-grid bg-panel p-8 text-center text-sm text-haze">
           No findings match this filter.
         </div>
       ) : (
-        <FindingsList findings={filtered} />
+        <FindingsList findings={filtered} selected={selected} />
       )}
     </div>
   );

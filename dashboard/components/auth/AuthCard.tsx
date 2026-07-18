@@ -31,13 +31,13 @@ export default function AuthCard() {
   }
 
   return (
-    <div className="w-full max-w-sm rounded-xl2 border border-line bg-panel/90 backdrop-blur-sm p-7 shadow-2xl shadow-black/40">
+    <div className="w-full max-w-sm rounded-xl2 border border-grid bg-panel/90 backdrop-blur-sm p-7 shadow-2xl shadow-black/40">
       <div className="flex mb-6 rounded-lg bg-panel2 p-1 text-sm">
         <button
           type="button"
           onClick={() => { setMode("signin"); setError(null); }}
           className={`flex-1 py-2 rounded-md transition font-medium ${
-            mode === "signin" ? "bg-brass text-ink" : "text-slate hover:text-mist"
+            mode === "signin" ? "bg-signal text-abyss" : "text-haze hover:text-mist"
           }`}
         >
           Sign in
@@ -46,7 +46,7 @@ export default function AuthCard() {
           type="button"
           onClick={() => { setMode("signup"); setError(null); }}
           className={`flex-1 py-2 rounded-md transition font-medium ${
-            mode === "signup" ? "bg-brass text-ink" : "text-slate hover:text-mist"
+            mode === "signup" ? "bg-signal text-abyss" : "text-haze hover:text-mist"
           }`}
         >
           Create account
@@ -55,7 +55,7 @@ export default function AuthCard() {
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label htmlFor="email" className="block text-xs font-medium text-slate mb-1.5">
+          <label htmlFor="email" className="block text-xs font-medium text-haze mb-1.5">
             Email
           </label>
           <input
@@ -66,12 +66,12 @@ export default function AuthCard() {
             value={email}
             onChange={(e) => setEmail(e.target.value)}
             placeholder="you@company.com"
-            className="w-full rounded-lg bg-panel2 border border-line px-3 py-2.5 text-sm text-mist placeholder:text-slate/60 focus:border-brass outline-none transition"
+            className="w-full rounded-lg bg-panel2 border border-grid px-3 py-2.5 text-sm text-mist placeholder:text-haze/60 focus:border-signal outline-none transition"
           />
         </div>
 
         <div>
-          <label htmlFor="password" className="block text-xs font-medium text-slate mb-1.5">
+          <label htmlFor="password" className="block text-xs font-medium text-haze mb-1.5">
             Password
           </label>
           <input
@@ -83,7 +83,7 @@ export default function AuthCard() {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder="At least 8 characters"
-            className="w-full rounded-lg bg-panel2 border border-line px-3 py-2.5 text-sm text-mist placeholder:text-slate/60 focus:border-brass outline-none transition"
+            className="w-full rounded-lg bg-panel2 border border-grid px-3 py-2.5 text-sm text-mist placeholder:text-haze/60 focus:border-signal outline-none transition"
           />
         </div>
 
@@ -96,7 +96,7 @@ export default function AuthCard() {
         <button
           type="submit"
           disabled={busy}
-          className="w-full rounded-lg bg-brass text-ink font-medium py-2.5 text-sm hover:brightness-110 disabled:brightness-75 disabled:cursor-not-allowed transition"
+          className="w-full rounded-lg bg-signal text-abyss font-medium py-2.5 text-sm hover:brightness-110 disabled:brightness-75 disabled:cursor-not-allowed transition"
         >
           {busy
             ? mode === "signin" ? "Signing in…" : "Creating account…"

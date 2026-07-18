@@ -18,13 +18,13 @@ export default function TopBar({
   onDeleteAccount: () => void;
 }) {
   return (
-    <header className="border-b border-line">
+    <header className="border-b border-grid">
       <div className="max-w-5xl mx-auto px-6 py-5 flex items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <BeaconDot state={scanning ? "scanning" : "idle"} />
           <div>
             <h1 className="display text-lg font-bold leading-none">Cloud-Sentinel</h1>
-            <p className="text-xs text-slate mt-1">
+            <p className="text-xs text-haze mt-1">
               {scanning ? "Scanning your perimeter…" : "Perimeter watch is idle"}
             </p>
           </div>
@@ -37,7 +37,7 @@ export default function TopBar({
           <Button variant="secondary" onClick={() => onScan("floci")} disabled={scanning}>
             Scan Floci
           </Button>
-          <div className="w-px h-6 bg-line mx-1" />
+          <div className="w-px h-6 bg-grid mx-1" />
           <AccountMenu email={email} onSignOut={onSignOut} onDeleteAccount={onDeleteAccount} />
         </div>
       </div>

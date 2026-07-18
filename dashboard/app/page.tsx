@@ -159,7 +159,7 @@ export default function DashboardPage() {
           <div
             className={`rounded-xl border px-4 py-3 text-sm flex items-center gap-2 ${
               banner.state === "running"
-                ? "border-brass/30 bg-brass/10 text-brass"
+                ? "border-signal/30 bg-signal/10 text-signal"
                 : banner.state === "done"
                 ? "border-good/30 bg-good/10 text-good"
                 : "border-critical/30 bg-critical/10 text-critical"

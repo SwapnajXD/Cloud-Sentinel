@@ -4,7 +4,7 @@ type BeaconState = "idle" | "scanning" | "alert";
 
 const COLORS: Record<BeaconState, string> = {
   idle: "var(--good)",
-  scanning: "var(--brass)",
+  scanning: "var(--signal)",
   alert: "var(--critical)",
 };
 

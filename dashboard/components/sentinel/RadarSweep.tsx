@@ -1,11 +1,10 @@
 "use client";
 
 /**
- * The Sweep — Cloud-Sentinel's one signature element. A slow rotating
- * radar line over a dot-grid, standing in for "watching the perimeter".
- * Used in exactly two places: ambient on the login screen (slow, quiet),
- * and as the literal scan-in-progress indicator on the dashboard (fast).
- * Kept out of everywhere else so it stays meaningful.
+ * The Scope — Cloud-Sentinel's signature element. A rotating sweep over a
+ * radar field. Used ambiently on the login screen (slow, quiet), and its
+ * sweep motion is reused literally inside the dashboard's Threat Scope
+ * visualization (fast, functional, sweeping over real findings).
  */
 export default function RadarSweep({
   size = 320,
@@ -20,23 +19,23 @@ export default function RadarSweep({
       style={{ width: size, height: size }}
       aria-hidden="true"
     >
-      <div className="absolute inset-0 rounded-full border border-line" />
-      <div className="absolute inset-[16%] rounded-full border border-line" />
-      <div className="absolute inset-[32%] rounded-full border border-line" />
-      <div className="absolute inset-[48%] rounded-full border border-line" />
+      <div className="absolute inset-0 rounded-full border border-grid" />
+      <div className="absolute inset-[16%] rounded-full border border-grid" />
+      <div className="absolute inset-[32%] rounded-full border border-grid" />
+      <div className="absolute inset-[48%] rounded-full border border-grid" />
 
       <div
         className={`absolute inset-0 rounded-full overflow-hidden sentinel-sweep ${
           active ? "sentinel-sweep--active" : ""
         }`}
         style={{
-          background: `conic-gradient(from 0deg, var(--brass) 0deg, transparent 40deg, transparent 360deg)`,
+          background: `conic-gradient(from 0deg, var(--signal) 0deg, transparent 40deg, transparent 360deg)`,
           opacity: active ? 0.55 : 0.28,
         }}
       />
 
       <div
-        className="absolute rounded-full bg-brass"
+        className="absolute rounded-full bg-signal"
         style={{
           width: 8,
           height: 8,

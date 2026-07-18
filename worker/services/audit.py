@@ -25,6 +25,9 @@ from services.compliance import (
     score_to_grade,
 )
 
+from services.correlation import find_compound_risks
+from services.diffing import compute_diff
+
 from scans.rds import (
     list_public_rds_instances,
     list_unencrypted_rds_instances,
@@ -36,7 +39,7 @@ from scans.lambda_checks import (
 )
 
 
-def build_audit_report(task, aws_clients, mode="aws"):
+def build_audit_report(task, aws_clients, mode="aws", previous_report=None):
     findings = []
 
     # =========================
@@ -95,6 +98,11 @@ def build_audit_report(task, aws_clients, mode="aws"):
             "impact": "Running instances increase attack surface if not managed.",
             "remediation": "Stop unused instances or secure access.",
             "details": f"Type: {instance['type']}, State: {instance['state']}",
+            # Not for direct display - lets the correlation step verify
+            # whether an open security group is actually attached to a
+            # live, reachable instance rather than just theoretically open.
+            "security_groups": instance.get("security_groups", []),
+            "public_ip": instance.get("public_ip"),
         })
 
     # =========================
@@ -304,7 +312,28 @@ def build_audit_report(task, aws_clients, mode="aws"):
     # ✅ COMPLIANCE MAPPING & RISK SCORE
     # =========================
     annotate_findings_with_cis(findings)
+
+    # =========================
+    # ✅ CORRELATION (compound risks)
+    # =========================
+    # Runs against the individual findings above, so it only ever sees
+    # real, already-computed findings - nothing here is invented from raw
+    # scan data directly.
+    compound_findings = find_compound_risks(findings)
+    findings.extend(compound_findings)
+    findings.sort(
+        key=lambda f: {"critical": 0, "medium": 1, "low": 2, "good": 3, "info": 4}.get(f["severity"], 5)
+    )
+
     risk_score = compute_risk_score(findings)
+
+    # =========================
+    # ✅ DIFF AGAINST PREVIOUS SCAN
+    # =========================
+    previous_findings = (
+        previous_report.get("findings") if previous_report else None
+    )
+    diff = compute_diff(findings, previous_findings)
 
     # =========================
     # ✅ SUMMARY
@@ -330,5 +359,6 @@ def build_audit_report(task, aws_clients, mode="aws"):
         "risk_score": risk_score,
         "risk_grade": score_to_grade(risk_score),
         "cis_summary": compute_cis_summary(findings),
+        "diff": diff,
         "findings": findings,
     }

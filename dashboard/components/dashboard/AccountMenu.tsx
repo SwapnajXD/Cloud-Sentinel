@@ -17,16 +17,16 @@ export default function AccountMenu({
     <div className="relative">
       <button
         onClick={() => setOpen((o) => !o)}
-        className="text-xs text-slate hover:text-mist mono px-2 py-1.5 rounded-lg hover:bg-panel2 transition"
+        className="text-xs text-haze hover:text-mist mono px-2 py-1.5 rounded-lg hover:bg-panel2 transition"
       >
-        {email} <span className="text-slate/60">▾</span>
+        {email} <span className="text-haze/60">▾</span>
       </button>
 
       {open && (
         <>
           {/* click-outside catcher */}
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 mt-2 w-48 rounded-lg border border-line bg-panel shadow-xl z-20 overflow-hidden">
+          <div className="absolute right-0 mt-2 w-48 rounded-lg border border-grid bg-panel shadow-xl z-20 overflow-hidden">
             <button
               onClick={() => {
                 setOpen(false);
@@ -41,7 +41,7 @@ export default function AccountMenu({
                 setOpen(false);
                 onDeleteAccount();
               }}
-              className="w-full text-left px-3.5 py-2.5 text-sm text-critical hover:bg-critical/10 transition border-t border-line"
+              className="w-full text-left px-3.5 py-2.5 text-sm text-critical hover:bg-critical/10 transition border-t border-grid"
             >
               Delete account
             </button>
