@@ -600,6 +600,68 @@ class WorkerTests(unittest.TestCase):
 
         fake_redis.lpush.assert_not_called()
 
+    def test_cis_mapping_root_mfa(self):
+        from services.compliance import map_finding_to_cis
+
+        mapping = map_finding_to_cis({"type": "RootMFA", "severity": "critical"})
+
+        self.assertEqual(mapping["control_id"], "1.5")
+
+    def test_cis_mapping_security_group_only_applies_to_ssh_rdp(self):
+        from services.compliance import map_finding_to_cis
+
+        ssh_finding = {"type": "SecurityGroupOpen", "title": "Sensitive service exposed: SSH (22)"}
+        mysql_finding = {"type": "SecurityGroupOpen", "title": "Sensitive service exposed: MySQL (3306)"}
+        web_finding = {"type": "SecurityGroupOpen", "title": "Web port 443 open to the internet"}
+
+        self.assertEqual(map_finding_to_cis(ssh_finding)["control_id"], "5.2")
+        # MySQL/web-port exposure is real and still flagged elsewhere, but
+        # CIS 5.2 specifically means SSH/RDP ("remote server administration
+        # ports") - it must not be misapplied to unrelated port exposures.
+        self.assertIsNone(map_finding_to_cis(mysql_finding))
+        self.assertIsNone(map_finding_to_cis(web_finding))
+
+    def test_cis_mapping_returns_none_for_unmapped_types(self):
+        """RDS/Lambda findings are real and useful, but they're not part of
+        the actual CIS AWS Foundations Benchmark - must not be force-mapped."""
+        from services.compliance import map_finding_to_cis
+
+        for ftype in ["RDSEncryption", "RDSPubliclyAccessible", "LambdaPublicFunctionURL", "EC2Instance", "S3Encryption"]:
+            self.assertIsNone(map_finding_to_cis({"type": ftype}))
+
+    def test_compute_cis_summary_worst_outcome_wins_per_control(self):
+        from services.compliance import compute_cis_summary, annotate_findings_with_cis
+
+        findings = [
+            {"type": "IAMUserMFA", "severity": "critical", "resource": "alice"},
+            {"type": "IAMUserMFA", "severity": "good", "resource": "bob"},
+            {"type": "RootMFA", "severity": "good"},
+        ]
+        annotate_findings_with_cis(findings)
+        summary = compute_cis_summary(findings)
+
+        self.assertEqual(summary["controls_assessed"], 2)  # 1.10 and 1.5
+        self.assertEqual(summary["controls_passing"], 1)  # only 1.5 (root) passes
+        self.assertEqual(summary["controls_failing"], 1)  # 1.10 fails (alice)
+
+    def test_compute_risk_score_and_grade(self):
+        from services.compliance import compute_risk_score, score_to_grade
+
+        no_findings_score = compute_risk_score([])
+        self.assertEqual(no_findings_score, 100)
+        self.assertEqual(score_to_grade(no_findings_score), "A")
+
+        bad_findings = [{"severity": "critical"}] * 4  # 4 * 15 = 60 penalty
+        score = compute_risk_score(bad_findings)
+        self.assertEqual(score, 40)
+        self.assertEqual(score_to_grade(score), "D")
+
+    def test_compute_risk_score_floors_at_zero(self):
+        from services.compliance import compute_risk_score
+
+        many_criticals = [{"severity": "critical"}] * 20  # way more than 100 penalty
+        self.assertEqual(compute_risk_score(many_criticals), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

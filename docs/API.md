@@ -231,6 +231,14 @@ Authorization: Bearer <jwt-token>
         "task_id": "5f2e1c3a-....",
         "user_id": 1,
         "summary": { "total": 3, "critical": 1, "medium": 1, "good": 1 },
+        "risk_score": 78,
+        "risk_grade": "B",
+        "cis_summary": {
+          "version": "CIS AWS Foundations Benchmark v1.4.0",
+          "controls_assessed": 2,
+          "controls_passing": 1,
+          "controls_failing": 1
+        },
         "findings": [
           {
             "type": "S3PublicAccess",
@@ -239,7 +247,12 @@ Authorization: Bearer <jwt-token>
             "resource": "example-bucket",
             "title": "Public S3 bucket",
             "description": "Bucket is publicly accessible.",
-            "remediation": "Remove public ACL or block public access."
+            "remediation": "Remove public ACL or block public access.",
+            "cis": {
+              "control_id": "2.1.5",
+              "control_title": "Ensure that S3 Buckets are configured with 'Block Public Access'",
+              "version": "CIS AWS Foundations Benchmark v1.4.0"
+            }
           }
         ]
       }
@@ -247,6 +260,13 @@ Authorization: Bearer <jwt-token>
   ]
 }
 ```
+
+`risk_score` is a transparent 0-100 score (start at 100, deduct a fixed
+penalty per finding by severity: critical -15, medium -5, low -1, floored
+at 0) with a letter grade (A-F). `cis` only appears on findings that
+correspond to a real CIS AWS Foundations Benchmark control - RDS and
+Lambda findings, for example, don't get one, since those services aren't
+part of that particular benchmark.
 
 ---
 

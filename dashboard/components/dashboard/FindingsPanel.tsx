@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import SummaryStats from "@/components/dashboard/SummaryStats";
+import RiskScore from "@/components/dashboard/RiskScore";
 import FindingsList from "@/components/dashboard/FindingsList";
 import AiSummary from "@/components/dashboard/AiSummary";
 
@@ -41,6 +42,14 @@ export default function FindingsPanel({
 
   return (
     <div className="space-y-6 min-w-0">
+      {typeof report?.report?.risk_score === "number" && (
+        <RiskScore
+          score={report.report.risk_score}
+          grade={report.report.risk_grade}
+          cisSummary={report.report.cis_summary}
+        />
+      )}
+
       {/* Summary always reflects ALL findings, independent of the filters below */}
       <SummaryStats findings={findings} />
 

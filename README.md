@@ -8,6 +8,17 @@ Cloud-Sentinel demonstrates production-style backend engineering concepts includ
 
 ## ✨ Features
 
+### 📋 Compliance & Risk Scoring
+
+* Maps applicable findings to real **CIS AWS Foundations Benchmark v1.4.0**
+  control IDs (root/IAM MFA, stale access keys, public S3 buckets, SSH/RDP
+  exposure) - RDS and Lambda findings are deliberately left unmapped since
+  they aren't part of the actual CIS Foundations Benchmark
+* Per-scan compliance summary (e.g. "3/5 CIS controls passing")
+* A transparent, additive 0-100 risk score + letter grade per scan (no
+  black-box weighting - the formula is a fixed penalty per finding severity,
+  easy to reproduce by hand)
+
 ### 🔒 AWS Security Audits
 
 * Detect public S3 buckets

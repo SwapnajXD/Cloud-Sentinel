@@ -51,6 +51,14 @@ function FindingRow({ finding }: { finding: any }) {
                 {finding.category}
               </span>
             )}
+            {finding.cis && (
+              <span
+                className="text-xs px-1.5 py-0.5 rounded border border-brass/40 text-brass mono"
+                title={finding.cis.control_title}
+              >
+                CIS {finding.cis.control_id}
+              </span>
+            )}
           </div>
           <p className="text-sm font-medium text-mist">
             {finding.title || finding.type || "Finding"}
@@ -74,6 +82,12 @@ function FindingRow({ finding }: { finding: any }) {
       {open && hasDetail && (
         <div className="mt-3 pl-0 space-y-2 text-sm text-slate border-t border-line pt-3">
           {description && <p>{description}</p>}
+          {finding.cis && (
+            <p>
+              <span className="text-mist font-medium">Compliance: </span>
+              {finding.cis.version} — {finding.cis.control_id} {finding.cis.control_title}
+            </p>
+          )}
           {finding.impact && (
             <p>
               <span className="text-mist font-medium">Impact: </span>

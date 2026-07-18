@@ -127,6 +127,26 @@ Additional services can be added by creating new scan modules.
 
 ---
 
+## Compliance & Risk Scoring
+
+`worker/services/compliance.py` runs after all scan modules finish and does
+two things to every report:
+
+1. **CIS mapping** - annotates findings with the matching CIS AWS Foundations
+   Benchmark v1.4.0 control ID, where one genuinely exists. Only IAM
+   (root/user MFA, stale access keys), S3 public access, and SSH/RDP security
+   group exposure get mapped - RDS and Lambda findings are real and useful,
+   but those services aren't part of the actual CIS Foundations Benchmark,
+   so they're intentionally left unmapped rather than forced onto a
+   benchmark that doesn't cover them.
+2. **Risk score** - a transparent 0-100 score per scan: start at 100,
+   subtract a fixed penalty per finding by severity (critical -15,
+   medium -5, low -1), floor at 0, convert to a letter grade (A-F). No
+   black-box weighting - the exact formula is reproducible by hand from
+   the findings list alone.
+
+---
+
 # Request Lifecycle
 
 ```text

@@ -18,6 +18,13 @@ from scans.iam import (
     list_users_without_mfa,
 )
 
+from services.compliance import (
+    annotate_findings_with_cis,
+    compute_cis_summary,
+    compute_risk_score,
+    score_to_grade,
+)
+
 from scans.rds import (
     list_public_rds_instances,
     list_unencrypted_rds_instances,
@@ -294,6 +301,12 @@ def build_audit_report(task, aws_clients, mode="aws"):
     )
 
     # =========================
+    # ✅ COMPLIANCE MAPPING & RISK SCORE
+    # =========================
+    annotate_findings_with_cis(findings)
+    risk_score = compute_risk_score(findings)
+
+    # =========================
     # ✅ SUMMARY
     # =========================
     summary = {
@@ -314,5 +327,8 @@ def build_audit_report(task, aws_clients, mode="aws"):
         "requested_at": task.get("requested_at")
         or datetime.now(timezone.utc).isoformat(),
         "summary": summary,
+        "risk_score": risk_score,
+        "risk_grade": score_to_grade(risk_score),
+        "cis_summary": compute_cis_summary(findings),
         "findings": findings,
     }
