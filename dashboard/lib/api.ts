@@ -114,7 +114,8 @@ export function getReports(token: string) {
 export function queueAudit(
   token: string,
   scope: string,
-  mode: "aws" | "floci" = "aws"
+  mode: "aws" | "floci" = "aws",
+  connectionId?: number
 ) {
   return apiRequest<ActionResponse>(
     "/api/audit",
@@ -122,6 +123,7 @@ export function queueAudit(
       method: "POST",
       body: JSON.stringify({
         mode,
+        connection_id: connectionId,
         params: { scope },
       }),
     },
@@ -196,6 +198,7 @@ export type Schedule = {
   interval_hours: number;
   next_run_at: string;
   created_at: string;
+  connection_id?: number | null;
 };
 
 // 🔁 Recurring scans
@@ -207,12 +210,17 @@ export function getSchedules(token: string) {
   );
 }
 
-export function createSchedule(token: string, mode: "aws" | "floci", intervalHours: number) {
+export function createSchedule(
+  token: string,
+  mode: "aws" | "floci",
+  intervalHours: number,
+  connectionId?: number
+) {
   return apiRequest<Schedule>(
     "/api/schedules",
     {
       method: "POST",
-      body: JSON.stringify({ mode, interval_hours: intervalHours }),
+      body: JSON.stringify({ mode, interval_hours: intervalHours, connection_id: connectionId }),
     },
     token
   );
@@ -221,6 +229,44 @@ export function createSchedule(token: string, mode: "aws" | "floci", intervalHou
 export function deleteSchedule(token: string, id: number) {
   return apiRequest<ActionResponse>(
     `/api/schedules/${id}`,
+    { method: "DELETE" },
+    token
+  );
+}
+
+export type AwsConnection = {
+  id: number;
+  role_arn: string;
+  label: string | null;
+  created_at: string;
+};
+
+// 🔐 Cross-account connections (AssumeRole)
+export function getAwsConnections(token: string) {
+  return apiRequest<{ connections: AwsConnection[] }>(
+    "/api/aws-connections",
+    { method: "GET" },
+    token
+  );
+}
+
+export function createAwsConnection(
+  token: string,
+  params: { role_arn: string; external_id: string; label?: string }
+) {
+  return apiRequest<AwsConnection>(
+    "/api/aws-connections",
+    {
+      method: "POST",
+      body: JSON.stringify(params),
+    },
+    token
+  );
+}
+
+export function deleteAwsConnection(token: string, id: number) {
+  return apiRequest<ActionResponse>(
+    `/api/aws-connections/${id}`,
     { method: "DELETE" },
     token
   );

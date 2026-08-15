@@ -7,6 +7,10 @@ services:
     environment:
       - NODE_ENV=production
       - NEXT_PUBLIC_BACKEND_URL=http://localhost:3000
+      # Optional: enables the "Connect AWS Account" flow (see infra/cloudformation/).
+      # Leave both blank to keep scanning via this server's own static AWS credentials only.
+      - NEXT_PUBLIC_CFN_TEMPLATE_URL=${NEXT_PUBLIC_CFN_TEMPLATE_URL:-}
+      - NEXT_PUBLIC_TRUSTED_PRINCIPAL_ARN=${NEXT_PUBLIC_TRUSTED_PRINCIPAL_ARN:-}
     ports:
       - "3001:3000"
     depends_on:

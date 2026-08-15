@@ -43,14 +43,13 @@ def get_db_connection():
     return psycopg2.connect(DATABASE_URL)
 
 
-def get_aws_clients(mode="aws"):
-    session = boto3.Session(region_name=AWS_REGION)
-
+def get_aws_clients(mode="aws", role_arn=None, external_id=None):
     if mode == "floci":
         if not FLOCI_ENDPOINT:
             raise ValueError("FLOCI_ENDPOINT not set")
 
         print(f"[MODE] ⚡ Using FLOCI at {FLOCI_ENDPOINT}")
+        session = boto3.Session(region_name=AWS_REGION)
 
         return {
             "s3": session.client("s3", endpoint_url=FLOCI_ENDPOINT),
@@ -61,7 +60,30 @@ def get_aws_clients(mode="aws"):
             "lambda": session.client("lambda", endpoint_url=FLOCI_ENDPOINT),
         }
 
-    print("[MODE] ☁️ Using REAL AWS")
+    if role_arn:
+        # Cross-account scan: assume the connected account's read-only
+        # role using its External ID, then build every client from the
+        # TEMPORARY credentials that come back - never from the worker's
+        # own long-lived credentials directly. Nothing about this session
+        # is persisted; it's used for this one scan and discarded.
+        print(f"[MODE] ☁️ Assuming role {role_arn}")
+        sts = boto3.client("sts", region_name=AWS_REGION)
+        assumed = sts.assume_role(
+            RoleArn=role_arn,
+            RoleSessionName="cloud-sentinel-scan",
+            ExternalId=external_id,
+            DurationSeconds=3600,
+        )
+        creds = assumed["Credentials"]
+        session = boto3.Session(
+            aws_access_key_id=creds["AccessKeyId"],
+            aws_secret_access_key=creds["SecretAccessKey"],
+            aws_session_token=creds["SessionToken"],
+            region_name=AWS_REGION,
+        )
+    else:
+        print("[MODE] ☁️ Using REAL AWS (static credentials)")
+        session = boto3.Session(region_name=AWS_REGION)
 
     return {
         "s3": session.client("s3"),
@@ -123,6 +145,34 @@ def ensure_schema(conn):
             )
             """
         )
+        # Mirrors the table the gateway creates for cross-account
+        # connections (see infra/cloudformation/).
+        cursor.execute(
+            """
+            CREATE TABLE IF NOT EXISTS aws_connections (
+                id SERIAL PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                role_arn TEXT NOT NULL,
+                external_id TEXT NOT NULL,
+                label TEXT,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+            )
+            """
+        )
+        # ALTER rather than baked into the CREATE TABLE statements above so
+        # this upgrades existing databases too, not just fresh ones.
+        cursor.execute(
+            """
+            ALTER TABLE audit_tasks
+            ADD COLUMN IF NOT EXISTS connection_id INTEGER REFERENCES aws_connections(id) ON DELETE SET NULL
+            """
+        )
+        cursor.execute(
+            """
+            ALTER TABLE scheduled_scans
+            ADD COLUMN IF NOT EXISTS connection_id INTEGER REFERENCES aws_connections(id) ON DELETE SET NULL
+            """
+        )
     conn.commit()
 
 
@@ -178,6 +228,20 @@ def get_latest_report(conn, user_id):
     return row[0] if row else None
 
 
+def get_aws_connection(conn, connection_id, user_id):
+    """Returns {"role_arn": ..., "external_id": ...} for this connection,
+    or None if it doesn't exist or doesn't belong to this user."""
+    with conn.cursor() as cursor:
+        cursor.execute(
+            "SELECT role_arn, external_id FROM aws_connections WHERE id = %s AND user_id = %s",
+            (connection_id, user_id),
+        )
+        row = cursor.fetchone()
+    if not row:
+        return None
+    return {"role_arn": row[0], "external_id": row[1]}
+
+
 # =========================
 # ✅ Task processing
 # =========================
@@ -196,11 +260,23 @@ def process_task(task, conn=None, aws_clients=None):
         print(f"[TASK RECEIVED] {task}")
         print(f"[AUDIT START] user={task['user_id']} mode={mode}")
 
-        # Built inside the try: a misconfigured FLOCI_ENDPOINT or an
-        # unreachable DB should fail *this task* (and go through the normal
-        # retry/dead-letter path below), not crash the whole worker loop.
-        aws_clients = aws_clients or get_aws_clients(mode)
+        # Built inside the try: a misconfigured FLOCI_ENDPOINT, an unknown
+        # connection, or an unreachable DB should fail *this task* (and go
+        # through the normal retry/dead-letter path below), not crash the
+        # whole worker loop.
         conn = conn or get_db_connection()
+
+        if aws_clients is None:
+            role_arn = None
+            external_id = None
+            connection_id = task.get("connection_id")
+            if connection_id:
+                connection = get_aws_connection(conn, connection_id, task["user_id"])
+                if not connection:
+                    raise ValueError(f"AWS connection {connection_id} not found")
+                role_arn = connection["role_arn"]
+                external_id = connection["external_id"]
+            aws_clients = get_aws_clients(mode, role_arn=role_arn, external_id=external_id)
 
         ensure_schema(conn)
         update_task_status(conn, task_id, "running")

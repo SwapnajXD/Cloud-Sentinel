@@ -158,6 +158,39 @@ export async function initDb(): Promise<void> {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS idx_scheduled_scans_due ON scheduled_scans(next_run_at)
   `);
+
+  // Cross-account scanning: each row is one AWS account a user has
+  // connected via the CloudFormation role (see infra/cloudformation/), so
+  // the worker can assume it and scan THEIR account instead of a single
+  // shared set of static credentials.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS aws_connections (
+      id SERIAL PRIMARY KEY,
+      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+      role_arn TEXT NOT NULL,
+      external_id TEXT NOT NULL,
+      label TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS idx_aws_connections_user ON aws_connections(user_id, created_at DESC)
+  `);
+
+  // Added via ALTER rather than baked into the CREATE TABLE statements
+  // above so this upgrades existing databases too, not just fresh ones -
+  // CREATE TABLE IF NOT EXISTS is a no-op against a table that already
+  // exists from before this feature shipped.
+  await pool.query(`
+    ALTER TABLE audit_tasks
+    ADD COLUMN IF NOT EXISTS connection_id INTEGER REFERENCES aws_connections(id) ON DELETE SET NULL
+  `);
+
+  await pool.query(`
+    ALTER TABLE scheduled_scans
+    ADD COLUMN IF NOT EXISTS connection_id INTEGER REFERENCES aws_connections(id) ON DELETE SET NULL
+  `);
 }
 
 // Types
@@ -241,18 +274,36 @@ app.post('/api/audit', authenticateJWT, async (req: Request, res: Response) => {
     const mode = req.body.mode === "floci" ? "floci" : "aws";
     const task_id = randomUUID();
 
+    // connection_id is optional: if provided (and it's actually yours),
+    // the worker assumes that role and scans that account. If omitted,
+    // the worker falls back to whatever static AWS credentials it already
+    // has configured - this keeps existing single-account setups working
+    // exactly as before; connecting an account is opt-in, not required.
+    let connection_id: number | null = null;
+    if (req.body.connection_id) {
+      const conn = await pool.query(
+        'SELECT id FROM aws_connections WHERE id = $1 AND user_id = $2',
+        [req.body.connection_id, user.id]
+      );
+      if (conn.rows.length === 0) {
+        return res.status(400).json({ error: 'connection not found' });
+      }
+      connection_id = conn.rows[0].id;
+    }
+
     const task = {
       task_id,
       action: 'start_audit',
       user_id: user.id,
       requested_at: new Date().toISOString(),
       mode, // ✅ IMPORTANT
+      connection_id,
       params: req.body.params || {},
     };
 
     await pool.query(
-      'INSERT INTO audit_tasks (task_id, user_id, status, mode) VALUES ($1, $2, $3, $4)',
-      [task_id, user.id, 'queued', mode]
+      'INSERT INTO audit_tasks (task_id, user_id, status, mode, connection_id) VALUES ($1, $2, $3, $4, $5)',
+      [task_id, user.id, 'queued', mode, connection_id]
     );
 
     await redisClient.lPush('audit_tasks', JSON.stringify(task));
@@ -386,11 +437,25 @@ app.post('/api/schedules', authenticateJWT, async (req: Request, res: Response) 
       });
     }
 
+    // Same opt-in pattern as /api/audit: omit it to keep scanning via
+    // whatever static credentials the worker already has configured.
+    let connection_id: number | null = null;
+    if (req.body.connection_id) {
+      const conn = await pool.query(
+        'SELECT id FROM aws_connections WHERE id = $1 AND user_id = $2',
+        [req.body.connection_id, user.id]
+      );
+      if (conn.rows.length === 0) {
+        return res.status(400).json({ error: 'connection not found' });
+      }
+      connection_id = conn.rows[0].id;
+    }
+
     const result = await pool.query(
-      `INSERT INTO scheduled_scans (user_id, mode, interval_hours, next_run_at)
-       VALUES ($1, $2, $3, NOW() + make_interval(hours => $3))
-       RETURNING id, mode, interval_hours, next_run_at, created_at`,
-      [user.id, mode, intervalHours]
+      `INSERT INTO scheduled_scans (user_id, mode, interval_hours, next_run_at, connection_id)
+       VALUES ($1, $2, $3, NOW() + make_interval(hours => $3), $4)
+       RETURNING id, mode, interval_hours, next_run_at, created_at, connection_id`,
+      [user.id, mode, intervalHours, connection_id]
     );
 
     res.status(201).json(result.rows[0]);
@@ -404,7 +469,7 @@ app.get('/api/schedules', authenticateJWT, async (req: Request, res: Response) =
   try {
     const user = req.user!;
     const result = await pool.query(
-      `SELECT id, mode, interval_hours, next_run_at, created_at
+      `SELECT id, mode, interval_hours, next_run_at, created_at, connection_id
        FROM scheduled_scans WHERE user_id = $1 ORDER BY created_at DESC`,
       [user.id]
     );
@@ -431,6 +496,76 @@ app.delete('/api/schedules/:id', authenticateJWT, async (req: Request, res: Resp
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: 'failed to delete schedule' });
+  }
+});
+
+// Cross-account AWS connections. The External ID is generated client-side
+// (it's not secret in the sense of needing server-side generation - its
+// entire job is to be an unguessable value tied to one specific
+// connection, which a client-generated UUID satisfies fine) and is only
+// ever used server-side to actually assume the role; connections are
+// listed and the ARN can be inspected, but the external_id itself isn't
+// echoed back in list responses since there's no legitimate reason a
+// browser needs to re-read it once the connection is saved.
+const ROLE_ARN_RE = /^arn:aws:iam::\d{12}:role\/.+$/;
+
+app.post('/api/aws-connections', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const { role_arn, external_id, label } = req.body;
+
+    if (!role_arn || !external_id) {
+      return res.status(400).json({ error: 'role_arn and external_id are required' });
+    }
+    if (typeof role_arn !== 'string' || !ROLE_ARN_RE.test(role_arn)) {
+      return res.status(400).json({ error: 'role_arn does not look like a valid IAM role ARN' });
+    }
+
+    const result = await pool.query(
+      `INSERT INTO aws_connections (user_id, role_arn, external_id, label)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, role_arn, label, created_at`,
+      [user.id, role_arn, external_id, label || null]
+    );
+
+    res.status(201).json(result.rows[0]);
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to save connection' });
+  }
+});
+
+app.get('/api/aws-connections', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const result = await pool.query(
+      `SELECT id, role_arn, label, created_at
+       FROM aws_connections WHERE user_id = $1 ORDER BY created_at DESC`,
+      [user.id]
+    );
+    res.json({ connections: result.rows });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to fetch connections' });
+  }
+});
+
+app.delete('/api/aws-connections/:id', authenticateJWT, async (req: Request, res: Response) => {
+  try {
+    const user = req.user!;
+    const result = await pool.query(
+      'DELETE FROM aws_connections WHERE id = $1 AND user_id = $2 RETURNING id',
+      [req.params.id, user.id]
+    );
+
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'connection not found' });
+    }
+
+    res.json({ status: 'success' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'failed to delete connection' });
   }
 });
 

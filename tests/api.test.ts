@@ -234,6 +234,8 @@ describe("protected routes require a valid token", () => {
     ["delete", "/api/schedules/1"],
     ["get", "/api/dead-letter"],
     ["delete", "/api/dead-letter/some-id"],
+    ["get", "/api/aws-connections"],
+    ["delete", "/api/aws-connections/1"],
   ])("%s %s returns 401 with no Authorization header", async (method, url) => {
     const res = await (request(app) as any)[method](url);
     expect(res.status).toBe(401);
@@ -289,6 +291,52 @@ describe("POST /api/audit", () => {
       .send({ mode: "floci" });
 
     expect(res.body.mode).toBe("floci");
+  });
+
+  it("rejects a connection_id that doesn't belong to the caller", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // SELECT ... aws_connections -> not found
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .post("/api/audit")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ mode: "aws", connection_id: 999 });
+
+    expect(res.status).toBe(400);
+    expect(mockLPush).not.toHaveBeenCalled();
+  });
+
+  it("queues a task against a valid connection_id", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 7 }] }); // SELECT ... aws_connections -> found
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // INSERT INTO audit_tasks
+    mockLPush.mockResolvedValueOnce(1);
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .post("/api/audit")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ mode: "aws", connection_id: 7 });
+
+    expect(res.status).toBe(202);
+    const [, payload] = mockLPush.mock.calls[0];
+    const task = JSON.parse(payload);
+    expect(task.connection_id).toBe(7);
+  });
+
+  it("omitting connection_id still queues normally (legacy static-credential path)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // INSERT INTO audit_tasks (no connection lookup at all)
+    mockLPush.mockResolvedValueOnce(1);
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .post("/api/audit")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ mode: "aws" });
+
+    expect(res.status).toBe(202);
+    const [, payload] = mockLPush.mock.calls[0];
+    const task = JSON.parse(payload);
+    expect(task.connection_id).toBeNull();
   });
 });
 
@@ -455,6 +503,18 @@ describe("POST /api/schedules", () => {
     expect(res.body.interval_hours).toBe(24);
   });
 
+  it("rejects a connection_id that doesn't belong to the caller", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // SELECT ... aws_connections -> not found
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .post("/api/schedules")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ mode: "aws", interval_hours: 24, connection_id: 999 });
+
+    expect(res.status).toBe(400);
+  });
+
   it("requires a token", async () => {
     const res = await request(app).post("/api/schedules").send({ interval_hours: 24 });
     expect(res.status).toBe(401);
@@ -495,6 +555,98 @@ describe("DELETE /api/schedules/:id", () => {
     const token = tokenFor(1, "a@b.com");
     const res = await request(app)
       .delete("/api/schedules/1")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+  });
+});
+
+describe("POST /api/aws-connections", () => {
+  it("rejects missing fields", async () => {
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .post("/api/aws-connections")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ role_arn: "arn:aws:iam::123456789012:role/CloudSentinelScanRole" });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a role_arn that isn't a valid IAM role ARN", async () => {
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .post("/api/aws-connections")
+      .set("Authorization", `Bearer ${token}`)
+      .send({ role_arn: "not-an-arn", external_id: "abc123" });
+
+    expect(res.status).toBe(400);
+  });
+
+  it("saves a valid connection and never echoes the external_id back", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{
+        id: 1,
+        role_arn: "arn:aws:iam::123456789012:role/CloudSentinelScanRole",
+        label: "prod account",
+        created_at: "2026-01-01T00:00:00Z",
+      }],
+    });
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .post("/api/aws-connections")
+      .set("Authorization", `Bearer ${token}`)
+      .send({
+        role_arn: "arn:aws:iam::123456789012:role/CloudSentinelScanRole",
+        external_id: "super-secret-external-id",
+        label: "prod account",
+      });
+
+    expect(res.status).toBe(201);
+    expect(res.body.role_arn).toContain("CloudSentinelScanRole");
+    expect(res.body.external_id).toBeUndefined();
+  });
+
+  it("requires a token", async () => {
+    const res = await request(app).post("/api/aws-connections").send({});
+    expect(res.status).toBe(401);
+  });
+});
+
+describe("GET /api/aws-connections", () => {
+  it("returns the caller's connections", async () => {
+    mockQuery.mockResolvedValueOnce({
+      rows: [{ id: 1, role_arn: "arn:aws:iam::123456789012:role/X", label: null, created_at: "2026-01-01T00:00:00Z" }],
+    });
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .get("/api/aws-connections")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body.connections).toHaveLength(1);
+  });
+});
+
+describe("DELETE /api/aws-connections/:id", () => {
+  it("returns 404 when the connection doesn't exist or belongs to someone else", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] });
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .delete("/api/aws-connections/999")
+      .set("Authorization", `Bearer ${token}`);
+
+    expect(res.status).toBe(404);
+  });
+
+  it("deletes the connection when it belongs to the caller", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 1 }] });
+
+    const token = tokenFor(1, "a@b.com");
+    const res = await request(app)
+      .delete("/api/aws-connections/1")
       .set("Authorization", `Bearer ${token}`);
 
     expect(res.status).toBe(200);

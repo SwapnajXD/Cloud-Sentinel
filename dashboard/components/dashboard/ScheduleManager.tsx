@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { createSchedule, deleteSchedule, Schedule } from "@/lib/api";
+import { createSchedule, deleteSchedule, Schedule, AwsConnection } from "@/lib/api";
 import Button from "@/components/ui/Button";
 
 const PRESETS = [
@@ -13,10 +13,12 @@ const PRESETS = [
 export default function ScheduleManager({
   token,
   schedules,
+  connections,
   onChanged,
 }: {
   token: string;
   schedules: Schedule[];
+  connections: AwsConnection[];
   onChanged: () => void;
 }) {
   const [mode, setMode] = useState<"aws" | "floci">("aws");
@@ -28,7 +30,10 @@ export default function ScheduleManager({
     setBusy(true);
     setError(null);
     try {
-      await createSchedule(token, mode, hours);
+      // Same "use the first connected account" default as manual scans -
+      // a picker for choosing between multiple is a natural next step.
+      const connectionId = mode === "aws" && connections.length > 0 ? connections[0].id : undefined;
+      await createSchedule(token, mode, hours, connectionId);
       onChanged();
     } catch (err) {
       console.error("Failed to create schedule", err);

@@ -3,12 +3,13 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuth } from "@/lib/auth-context";
-import { getReports, queueAudit, getTaskStatus, getDeadLetterTasks, DeadLetterTask, getSchedules, Schedule } from "@/lib/api";
+import { getReports, queueAudit, getTaskStatus, getDeadLetterTasks, DeadLetterTask, getSchedules, Schedule, getAwsConnections, AwsConnection } from "@/lib/api";
 import TopBar from "@/components/dashboard/TopBar";
 import FindingsPanel from "@/components/dashboard/FindingsPanel";
 import ScanHistory from "@/components/dashboard/ScanHistory";
 import DeadLetterPanel from "@/components/dashboard/DeadLetterPanel";
 import ScheduleManager from "@/components/dashboard/ScheduleManager";
+import ConnectAwsAccount from "@/components/dashboard/ConnectAwsAccount";
 import EmptyState from "@/components/dashboard/EmptyState";
 import DeleteAccountModal from "@/components/dashboard/DeleteAccountModal";
 import RadarSweep from "@/components/sentinel/RadarSweep";
@@ -29,6 +30,7 @@ export default function DashboardPage() {
   const [showDeleteModal, setShowDeleteModal] = useState(false);
   const [deadLetterTasks, setDeadLetterTasks] = useState<DeadLetterTask[]>([]);
   const [schedules, setSchedules] = useState<Schedule[]>([]);
+  const [connections, setConnections] = useState<AwsConnection[]>([]);
 
   useEffect(() => {
     if (ready && !token) router.replace("/login");
@@ -68,20 +70,36 @@ export default function DashboardPage() {
     }
   }, []);
 
+  const fetchConnections = useCallback(async (tk: string) => {
+    try {
+      const res = await getAwsConnections(tk);
+      setConnections(res.connections || []);
+    } catch (err) {
+      console.error("Failed to fetch AWS connections", err);
+    }
+  }, []);
+
   useEffect(() => {
     if (token) {
       fetchReports(token);
       fetchDeadLetterTasks(token);
       fetchSchedules(token);
+      fetchConnections(token);
     }
-  }, [token, fetchReports, fetchDeadLetterTasks, fetchSchedules]);
+  }, [token, fetchReports, fetchDeadLetterTasks, fetchSchedules, fetchConnections]);
 
   async function runScan(mode: "aws" | "floci") {
     if (!token) return;
     setBanner({ mode, state: "running" });
 
+    // If the user has connected their own AWS account(s), use the first
+    // one automatically. With more than one connected, this is a
+    // reasonable default for now - a picker to choose between multiple
+    // connected accounts is a natural next step, not yet built.
+    const connectionId = mode === "aws" && connections.length > 0 ? connections[0].id : undefined;
+
     try {
-      const { task_id } = await queueAudit(token, "default", mode);
+      const { task_id } = await queueAudit(token, "default", mode, connectionId);
 
       if (!task_id) {
         setTimeout(() => fetchReports(token), 1500);
@@ -179,7 +197,8 @@ export default function DashboardPage() {
               <EmptyState />
             )}
             <div className="space-y-6">
-              <ScheduleManager token={token} schedules={schedules} onChanged={() => fetchSchedules(token)} />
+              <ConnectAwsAccount token={token} connections={connections} onChanged={() => fetchConnections(token)} />
+              <ScheduleManager token={token} schedules={schedules} connections={connections} onChanged={() => fetchSchedules(token)} />
               <DeadLetterPanel
                 token={token}
                 tasks={deadLetterTasks}

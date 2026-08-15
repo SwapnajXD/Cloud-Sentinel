@@ -13,17 +13,20 @@ from scans.iam import check_mfa_for_current_user
 
 
 class FakeCursor:
-    def __init__(self, fetchone_value=None, fetchall_value=None):
+    def __init__(self, fetchone_value=None, fetchall_value=None, fetchone_queue=None):
         self.statements = []
         self.params = []
         self.fetchone_value = fetchone_value
         self.fetchall_value = fetchall_value if fetchall_value is not None else []
+        self.fetchone_queue = list(fetchone_queue) if fetchone_queue else None
 
     def execute(self, statement, params=None):
         self.statements.append(statement)
         self.params.append(params)
 
     def fetchone(self):
+        if self.fetchone_queue is not None and len(self.fetchone_queue) > 0:
+            return self.fetchone_queue.pop(0)
         return self.fetchone_value
 
     def fetchall(self):
@@ -599,6 +602,97 @@ class WorkerTests(unittest.TestCase):
             worker._check_due_schedules()
 
         fake_redis.lpush.assert_not_called()
+
+    def test_get_aws_clients_assumes_role_when_role_arn_provided(self):
+        fake_sts_for_assume = Mock()
+        fake_sts_for_assume.assume_role.return_value = {
+            "Credentials": {
+                "AccessKeyId": "AKIAFAKE",
+                "SecretAccessKey": "fake-secret",
+                "SessionToken": "fake-token",
+            }
+        }
+        fake_session = Mock()
+        fake_session.client.return_value = Mock()
+
+        with patch.object(worker.boto3, "client", return_value=fake_sts_for_assume), \
+             patch.object(worker.boto3, "Session", return_value=fake_session) as mock_session_cls:
+            clients = worker.get_aws_clients(
+                "aws", role_arn="arn:aws:iam::123456789012:role/CloudSentinelScanRole", external_id="ext-123"
+            )
+
+        fake_sts_for_assume.assume_role.assert_called_once_with(
+            RoleArn="arn:aws:iam::123456789012:role/CloudSentinelScanRole",
+            RoleSessionName="cloud-sentinel-scan",
+            ExternalId="ext-123",
+            DurationSeconds=3600,
+        )
+        # The session must be built from the TEMPORARY credentials that came
+        # back from assume_role, not the worker's own static credentials.
+        _, session_kwargs = mock_session_cls.call_args
+        self.assertEqual(session_kwargs["aws_access_key_id"], "AKIAFAKE")
+        self.assertEqual(session_kwargs["aws_session_token"], "fake-token")
+        self.assertIn("s3", clients)
+        self.assertIn("lambda", clients)
+
+    def test_get_aws_clients_uses_static_credentials_without_role_arn(self):
+        """The legacy single-account path must keep working unchanged when
+        no connection is involved - this is opt-in, not a breaking change."""
+        fake_session = Mock()
+        fake_session.client.return_value = Mock()
+
+        with patch.object(worker.boto3, "Session", return_value=fake_session) as mock_session_cls:
+            worker.get_aws_clients("aws")
+
+        _, session_kwargs = mock_session_cls.call_args
+        self.assertNotIn("aws_access_key_id", session_kwargs)
+
+    def test_get_aws_connection_returns_none_when_not_found(self):
+        conn = FakeConnection()
+        conn.cursor_obj.fetchone_value = None
+
+        result = worker.get_aws_connection(conn, 999, 1)
+
+        self.assertIsNone(result)
+
+    def test_get_aws_connection_returns_role_arn_and_external_id(self):
+        conn = FakeConnection()
+        conn.cursor_obj.fetchone_value = ("arn:aws:iam::123456789012:role/X", "ext-abc")
+
+        result = worker.get_aws_connection(conn, 7, 1)
+
+        self.assertEqual(result["role_arn"], "arn:aws:iam::123456789012:role/X")
+        self.assertEqual(result["external_id"], "ext-abc")
+
+    def test_process_task_looks_up_and_uses_the_connection(self):
+        task = {"action": "start_audit", "user_id": 5, "connection_id": 9, "mode": "aws"}
+        conn = FakeConnection()
+        # First fetchone: the connection lookup. Second: the report INSERT.
+        conn.cursor_obj.fetchone_queue = [
+            ("arn:aws:iam::123456789012:role/X", "ext-abc"),
+            (55,),
+        ]
+
+        with patch.object(worker, "get_aws_clients", return_value=_fake_aws_clients()) as mock_get_clients, \
+             patch.object(worker, "build_audit_report", return_value={"findings": []}):
+            result = worker.process_task(task, conn=conn)
+
+        self.assertEqual(result["status"], "ok")
+        mock_get_clients.assert_called_once_with(
+            "aws", role_arn="arn:aws:iam::123456789012:role/X", external_id="ext-abc"
+        )
+
+    def test_process_task_fails_cleanly_on_unknown_connection(self):
+        """An unknown/foreign connection_id must fail this one task through
+        the normal error path, not raise an unhandled exception."""
+        task = {"action": "start_audit", "user_id": 5, "connection_id": 999, "mode": "aws"}
+        conn = FakeConnection()
+        conn.cursor_obj.fetchone_value = None  # connection not found
+
+        result = worker.process_task(task, conn=conn)
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("999", result["error"])
 
     def test_cis_mapping_root_mfa(self):
         from services.compliance import map_finding_to_cis
