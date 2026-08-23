@@ -56,6 +56,7 @@ The project uses the following environment variables.
 | ----------------------- | ---------------------------------------- |
 | DATABASE_URL            | PostgreSQL connection string            |
 | REDIS_URL               | Redis connection string                 |
+| SINGLE_USER_MODE        | Defaults to `true`. Registration closes automatically after the first account exists, keeping a cloned copy of this project a personal tool rather than an accidentally-exposed multi-tenant service. Read the README's "Security & Deployment Posture" section in full before setting this to `false`. |
 | JWT_SECRET              | **Required.** Secret used to sign JWT tokens. The gateway refuses to start if this is unset - there is no default. Generate with `openssl rand -base64 48`. |
 | ALLOWED_ORIGIN          | Comma-separated list of origins allowed to call the gateway from a browser. Leave blank and cross-origin requests are blocked in production (allowed in local dev). |
 | POSTGRES_PASSWORD       | Password for the `postgres` user used by both the `db` service and the gateway/worker connection string. Change beyond local dev. |

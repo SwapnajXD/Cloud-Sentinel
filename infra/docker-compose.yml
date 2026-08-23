@@ -30,6 +30,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in infra/.env - see .env.example}
       - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-}
+      - SINGLE_USER_MODE=${SINGLE_USER_MODE:-true}
     ports:
       - "3000:3000"
     depends_on:

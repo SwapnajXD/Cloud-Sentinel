@@ -216,6 +216,16 @@ async function findUserByEmail(email: string): Promise<UserFromDb | undefined> {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// SECURITY POSTURE: this app defaults to single-user mode. Registration
+// closes itself after the first account exists, so cloning this repo and
+// running it gives you a personal tool, not an accidentally-exposed
+// multi-tenant service. This app has NOT been hardened for letting
+// strangers register and connect their own AWS accounts (no TLS by
+// default, no email verification, the worker's own IAM identity isn't
+// documented as least-privilege, no per-tenant abuse limits) - see
+// README.md "Security & Deployment Posture" before ever disabling this.
+const SINGLE_USER_MODE = process.env.SINGLE_USER_MODE !== 'false';
+
 app.post('/api/register', authLimiter, async (req: Request, res: Response) => {
   try {
     const { email, password } = req.body;
@@ -228,6 +238,16 @@ app.post('/api/register', authLimiter, async (req: Request, res: Response) => {
     }
     if (typeof password !== 'string' || password.length < 8) {
       return res.status(400).json({ error: 'weak password' });
+    }
+
+    if (SINGLE_USER_MODE) {
+      const existing = await pool.query('SELECT id FROM users LIMIT 1');
+      if (existing.rows.length > 0) {
+        return res.status(403).json({
+          error:
+            'registration closed - this instance is running in single-user mode (SINGLE_USER_MODE=true, the default). See README.md before disabling it.',
+        });
+      }
     }
 
     const hash = await bcrypt.hash(password, 12);

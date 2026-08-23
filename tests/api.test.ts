@@ -109,6 +109,30 @@ describe("GET /health", () => {
 describe("POST /api/register", () => {
   const ip = freshIp();
 
+  it("allows registration when no users exist yet (single-user mode, first account)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // SELECT ... LIMIT 1 -> no existing users
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 1, email: "first@b.com" }] }); // INSERT
+
+    const res = await request(app)
+      .post("/api/register")
+      .set("X-Forwarded-For", ip)
+      .send({ email: "first@b.com", password: "supersecret" });
+
+    expect(res.status).toBe(201);
+  });
+
+  it("rejects a second registration once a user already exists (single-user mode is the default)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 1 }] }); // SELECT ... LIMIT 1 -> a user already exists
+
+    const res = await request(app)
+      .post("/api/register")
+      .set("X-Forwarded-For", ip)
+      .send({ email: "second@b.com", password: "supersecret" });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/single-user mode/);
+  });
+
   it("rejects a missing email/password", async () => {
     const res = await request(app).post("/api/register").set("X-Forwarded-For", ip).send({});
     expect(res.status).toBe(400);
@@ -134,6 +158,7 @@ describe("POST /api/register", () => {
   });
 
   it("creates a user and returns id + email (no password, no token)", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // SINGLE_USER_MODE check -> no existing users
     mockQuery.mockResolvedValueOnce({ rows: [{ id: 1, email: "a@b.com" }] });
 
     const res = await request(app)
@@ -148,6 +173,7 @@ describe("POST /api/register", () => {
   });
 
   it("returns 409 when the email is already registered", async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [] }); // SINGLE_USER_MODE check -> no existing users
     mockQuery.mockRejectedValueOnce({ code: "23505" });
 
     const res = await request(app)
