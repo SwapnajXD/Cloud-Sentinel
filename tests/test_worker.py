@@ -126,7 +126,7 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(conn.commits, 4)
         # Caller supplied the connection, so process_task must not close it.
         self.assertFalse(conn.closed)
-        self.assertIn("audit_reports", conn.cursor_obj.statements[0])
+        self.assertTrue(any("audit_reports" in s for s in conn.cursor_obj.statements))
         status_updates = [s for s in conn.cursor_obj.statements if "UPDATE audit_tasks" in s]
         self.assertEqual(len(status_updates), 2)
 

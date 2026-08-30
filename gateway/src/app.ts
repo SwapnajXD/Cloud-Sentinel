@@ -94,103 +94,127 @@ export async function waitForPostgres(): Promise<void> {
 }
 
 // DB Init
+// Shared with worker.py's SCHEMA_LOCK_KEY - an arbitrary constant both
+// processes use to serialize schema setup against each other.
+// CREATE TABLE IF NOT EXISTS is NOT safe against two processes racing to
+// create the same table for the first time: both can pass the "does it
+// exist?" check concurrently, then collide creating the underlying SERIAL
+// sequence (duplicate key on pg_class_relname_nsp_index). The gateway and
+// worker both run schema setup on startup, so without this lock they can
+// - and did, in practice - race each other on a freshly-added table.
+const SCHEMA_LOCK_KEY = 727001;
+
 export async function initDb(): Promise<void> {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id SERIAL PRIMARY KEY,
-      email TEXT UNIQUE NOT NULL,
-      password TEXT NOT NULL,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
+  // pg_advisory_lock is session-scoped: it MUST be acquired, used, and
+  // released on the exact same connection throughout, not via pool.query()
+  // (which can hand out a different pooled connection per call). Postgres
+  // releases the lock automatically if this connection ever drops, so a
+  // crash mid-setup can't leave it permanently stuck.
+  const client = await pool.connect();
 
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS audit_reports (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      report JSONB,
-      created_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
+  try {
+    await client.query('SELECT pg_advisory_lock($1)', [SCHEMA_LOCK_KEY]);
 
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_reports ON audit_reports(user_id, created_at DESC)
-  `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        email TEXT UNIQUE NOT NULL,
+        password TEXT NOT NULL,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
 
-  // Tracks the lifecycle of a queued audit (queued -> running -> done/error)
-  // so the dashboard can show real progress instead of blindly polling
-  // /api/reports and hoping something new shows up.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS audit_tasks (
-      task_id TEXT PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      status TEXT NOT NULL DEFAULT 'queued',
-      mode TEXT NOT NULL DEFAULT 'aws',
-      report_id INTEGER REFERENCES audit_reports(id) ON DELETE SET NULL,
-      error TEXT,
-      created_at TIMESTAMP DEFAULT NOW(),
-      updated_at TIMESTAMP DEFAULT NOW()
-    )
-  `);
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS audit_reports (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        report JSONB,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
 
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_audit_tasks_user ON audit_tasks(user_id, created_at DESC)
-  `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_reports ON audit_reports(user_id, created_at DESC)
+    `);
 
-  // Recurring scans: a schedule is checked by the worker's background
-  // scheduler loop and turned into a normal audit_tasks row + Redis push
-  // when it comes due, exactly like a manually-triggered scan.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS scheduled_scans (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      mode TEXT NOT NULL DEFAULT 'aws',
-      interval_hours INTEGER NOT NULL,
-      next_run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
+    // Tracks the lifecycle of a queued audit (queued -> running -> done/error)
+    // so the dashboard can show real progress instead of blindly polling
+    // /api/reports and hoping something new shows up.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS audit_tasks (
+        task_id TEXT PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        status TEXT NOT NULL DEFAULT 'queued',
+        mode TEXT NOT NULL DEFAULT 'aws',
+        report_id INTEGER REFERENCES audit_reports(id) ON DELETE SET NULL,
+        error TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
 
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_scheduled_scans_user ON scheduled_scans(user_id, created_at DESC)
-  `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_audit_tasks_user ON audit_tasks(user_id, created_at DESC)
+    `);
 
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_scheduled_scans_due ON scheduled_scans(next_run_at)
-  `);
+    // Recurring scans: a schedule is checked by the worker's background
+    // scheduler loop and turned into a normal audit_tasks row + Redis push
+    // when it comes due, exactly like a manually-triggered scan.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS scheduled_scans (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        mode TEXT NOT NULL DEFAULT 'aws',
+        interval_hours INTEGER NOT NULL,
+        next_run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
 
-  // Cross-account scanning: each row is one AWS account a user has
-  // connected via the CloudFormation role (see infra/cloudformation/), so
-  // the worker can assume it and scan THEIR account instead of a single
-  // shared set of static credentials.
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS aws_connections (
-      id SERIAL PRIMARY KEY,
-      user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
-      role_arn TEXT NOT NULL,
-      external_id TEXT NOT NULL,
-      label TEXT,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_scheduled_scans_user ON scheduled_scans(user_id, created_at DESC)
+    `);
 
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS idx_aws_connections_user ON aws_connections(user_id, created_at DESC)
-  `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_scheduled_scans_due ON scheduled_scans(next_run_at)
+    `);
 
-  // Added via ALTER rather than baked into the CREATE TABLE statements
-  // above so this upgrades existing databases too, not just fresh ones -
-  // CREATE TABLE IF NOT EXISTS is a no-op against a table that already
-  // exists from before this feature shipped.
-  await pool.query(`
-    ALTER TABLE audit_tasks
-    ADD COLUMN IF NOT EXISTS connection_id INTEGER REFERENCES aws_connections(id) ON DELETE SET NULL
-  `);
+    // Cross-account scanning: each row is one AWS account a user has
+    // connected via the CloudFormation role (see infra/cloudformation/), so
+    // the worker can assume it and scan THEIR account instead of a single
+    // shared set of static credentials.
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS aws_connections (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        role_arn TEXT NOT NULL,
+        external_id TEXT NOT NULL,
+        label TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `);
 
-  await pool.query(`
-    ALTER TABLE scheduled_scans
-    ADD COLUMN IF NOT EXISTS connection_id INTEGER REFERENCES aws_connections(id) ON DELETE SET NULL
-  `);
+    await client.query(`
+      CREATE INDEX IF NOT EXISTS idx_aws_connections_user ON aws_connections(user_id, created_at DESC)
+    `);
+
+    // Added via ALTER rather than baked into the CREATE TABLE statements
+    // above so this upgrades existing databases too, not just fresh ones -
+    // CREATE TABLE IF NOT EXISTS is a no-op against a table that already
+    // exists from before this feature shipped.
+    await client.query(`
+      ALTER TABLE audit_tasks
+      ADD COLUMN IF NOT EXISTS connection_id INTEGER REFERENCES aws_connections(id) ON DELETE SET NULL
+    `);
+
+    await client.query(`
+      ALTER TABLE scheduled_scans
+      ADD COLUMN IF NOT EXISTS connection_id INTEGER REFERENCES aws_connections(id) ON DELETE SET NULL
+    `);
+  } finally {
+    await client.query('SELECT pg_advisory_unlock($1)', [SCHEMA_LOCK_KEY]);
+    client.release();
+  }
 }
 
 // Types

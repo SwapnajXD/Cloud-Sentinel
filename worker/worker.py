@@ -98,8 +98,22 @@ def get_aws_clients(mode="aws", role_arn=None, external_id=None):
 # =========================
 # ✅ Schema
 # =========================
+# Shared with the gateway's app.ts SCHEMA_LOCK_KEY - an arbitrary constant
+# both processes use to serialize schema setup against each other.
+# CREATE TABLE IF NOT EXISTS is NOT safe against two processes racing to
+# create the same table for the first time: both can pass the "does it
+# exist?" check concurrently, then collide creating the underlying SERIAL
+# sequence (duplicate key on pg_class_relname_nsp_index). The gateway and
+# worker both run schema setup on startup - the worker's scheduler thread
+# calls this immediately on boot, not just per-task - so without this lock
+# they can, and did in practice, race each other on a freshly-added table.
+SCHEMA_LOCK_KEY = 727001
+
+
 def ensure_schema(conn):
     with conn.cursor() as cursor:
+        cursor.execute("SELECT pg_advisory_lock(%s)", (SCHEMA_LOCK_KEY,))
+
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS audit_reports (
@@ -173,6 +187,8 @@ def ensure_schema(conn):
             ADD COLUMN IF NOT EXISTS connection_id INTEGER REFERENCES aws_connections(id) ON DELETE SET NULL
             """
         )
+
+        cursor.execute("SELECT pg_advisory_unlock(%s)", (SCHEMA_LOCK_KEY,))
     conn.commit()
 
 
