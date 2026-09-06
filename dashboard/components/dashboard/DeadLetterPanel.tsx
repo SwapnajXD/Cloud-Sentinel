@@ -47,7 +47,7 @@ export default function DeadLetterPanel({
                 </span>
               )}
             </div>
-            <p className="text-mist mb-2 break-words">
+            <p className="text-sm text-mist leading-relaxed mb-2 break-words">
               {t.final_error || "Scan failed after all retries."}
             </p>
             <button

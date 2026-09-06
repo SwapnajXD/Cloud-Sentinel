@@ -22,7 +22,7 @@ export default function RiskScore({
     controls_failing: number;
   };
 }) {
-  const color = GRADE_COLOR[grade] || "var(--slate)";
+  const color = GRADE_COLOR[grade] || "var(--haze)";
 
   return (
     <div className="rounded-xl2 border border-grid bg-panel p-6 flex flex-col sm:flex-row gap-6 sm:items-center">
@@ -66,7 +66,7 @@ export default function RiskScore({
                 }}
               />
             </div>
-            <span className="text-xs text-haze whitespace-nowrap">
+            <span className="text-sm text-haze whitespace-nowrap">
               {cisSummary.controls_passing}/{cisSummary.controls_assessed} controls passing
             </span>
           </div>

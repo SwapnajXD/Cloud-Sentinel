@@ -84,11 +84,11 @@ export default function ConnectAwsAccount({
           {connections.map((c) => (
             <div
               key={c.id}
-              className="flex items-center justify-between gap-2 rounded-lg bg-panel2 border border-grid px-3 py-2 text-xs"
+              className="flex items-center justify-between gap-2 rounded-lg bg-panel2 border border-grid px-3 py-2 text-sm"
             >
               <div className="min-w-0">
                 <p className="text-mist truncate">{c.label || "Connected account"}</p>
-                <p className="text-haze mono truncate">{c.role_arn}</p>
+                <p className="text-haze text-xs mono truncate">{c.role_arn}</p>
               </div>
               <button
                 onClick={() => handleDelete(c.id)}
@@ -103,10 +103,10 @@ export default function ConnectAwsAccount({
       )}
 
       {!CONFIGURED && (
-        <p className="text-xs text-medium mb-1">
+        <p className="text-sm text-medium leading-relaxed mb-1">
           Cross-account connections aren&rsquo;t configured on this deployment
-          yet (missing <span className="mono">NEXT_PUBLIC_CFN_TEMPLATE_URL</span> /{" "}
-          <span className="mono">NEXT_PUBLIC_TRUSTED_PRINCIPAL_ARN</span>). Scans will
+          yet (missing <span className="mono text-xs">NEXT_PUBLIC_CFN_TEMPLATE_URL</span> /{" "}
+          <span className="mono text-xs">NEXT_PUBLIC_TRUSTED_PRINCIPAL_ARN</span>). Scans will
           use this server&rsquo;s existing static AWS credentials instead.
         </p>
       )}
@@ -119,7 +119,7 @@ export default function ConnectAwsAccount({
 
       {CONFIGURED && externalId !== null && (
         <div className="space-y-2.5">
-          <ol className="text-xs text-haze list-decimal list-inside space-y-1">
+          <ol className="text-sm text-haze leading-relaxed list-decimal list-inside space-y-1">
             <li>
               <a
                 href={buildQuicklink(externalId)}
@@ -141,15 +141,15 @@ export default function ConnectAwsAccount({
             value={roleArn}
             onChange={(e) => setRoleArn(e.target.value)}
             placeholder="arn:aws:iam::123456789012:role/CloudSentinelScanRole"
-            className="w-full rounded-lg bg-panel2 border border-grid px-3 py-2 text-xs mono text-mist placeholder:text-haze/60 focus:border-signal outline-none transition"
+            className="w-full rounded-lg bg-panel2 border border-grid px-3 py-2 text-sm mono text-mist placeholder:text-haze/60 focus:border-signal outline-none transition"
           />
           <input
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             placeholder='Label (optional, e.g. "prod")'
-            className="w-full rounded-lg bg-panel2 border border-grid px-3 py-2 text-xs text-mist placeholder:text-haze/60 focus:border-signal outline-none transition"
+            className="w-full rounded-lg bg-panel2 border border-grid px-3 py-2 text-sm text-mist placeholder:text-haze/60 focus:border-signal outline-none transition"
           />
-          {error && <p className="text-xs text-critical">{error}</p>}
+          {error && <p className="text-sm text-critical">{error}</p>}
           <div className="flex gap-2">
             <Button variant="ghost" onClick={() => setExternalId(null)}>
               Cancel

@@ -63,12 +63,12 @@ export default function ScheduleManager({
           {schedules.map((s) => (
             <div
               key={s.id}
-              className="flex items-center justify-between gap-2 rounded-lg bg-panel2 border border-grid px-3 py-2 text-xs"
+              className="flex items-center justify-between gap-2 rounded-lg bg-panel2 border border-grid px-3 py-2 text-sm"
             >
               <div>
-                <span className="mono uppercase text-mist">{s.mode}</span>
+                <span className="mono uppercase text-mist font-medium">{s.mode}</span>
                 <span className="text-haze"> · every {s.interval_hours}h</span>
-                <p className="text-haze mt-0.5">
+                <p className="text-haze text-xs mt-0.5">
                   Next: {new Date(s.next_run_at).toLocaleString()}
                 </p>
               </div>

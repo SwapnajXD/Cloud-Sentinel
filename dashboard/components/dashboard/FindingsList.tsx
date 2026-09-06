@@ -97,7 +97,7 @@ function FindingRow({ finding, isSelected }: { finding: any; isSelected: boolean
               </span>
             )}
           </div>
-          <p className="text-sm font-medium text-mist">
+          <p className="text-base font-semibold text-mist leading-snug">
             {finding.title || finding.type || "Finding"}
           </p>
           {finding.resource && (
@@ -117,29 +117,29 @@ function FindingRow({ finding, isSelected }: { finding: any; isSelected: boolean
       </button>
 
       {open && hasDetail && (
-        <div className="mt-3 pl-0 space-y-2 text-sm text-haze border-t border-grid pt-3">
+        <div className="mt-3 pl-0 space-y-2 text-sm text-haze leading-relaxed border-t border-grid pt-3">
           {description && <p>{description}</p>}
           {finding.cis && (
             <p>
-              <span className="text-mist font-medium">Compliance: </span>
+              <span className="text-mist font-semibold">Compliance: </span>
               {finding.cis.version} — {finding.cis.control_id} {finding.cis.control_title}
             </p>
           )}
           {finding.impact && (
             <p>
-              <span className="text-mist font-medium">Impact: </span>
+              <span className="text-mist font-semibold">Impact: </span>
               {finding.impact}
             </p>
           )}
           {finding.remediation && (
             <p>
-              <span className="text-mist font-medium">Fix: </span>
+              <span className="text-mist font-semibold">Fix: </span>
               {finding.remediation}
             </p>
           )}
           {finding.correlates && (
             <p>
-              <span className="text-mist font-medium">Built from: </span>
+              <span className="text-mist font-semibold">Built from: </span>
               {finding.correlates
                 .map((c: any) => `${c.type} (${c.resource})`)
                 .join(", ")}

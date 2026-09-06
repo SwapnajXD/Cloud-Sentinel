@@ -91,7 +91,7 @@ export default function ThreatScope({
             x={x}
             y={y}
             fill="var(--haze)"
-            fontSize={11}
+            fontSize={12}
             textAnchor="middle"
             dominantBaseline="middle"
             className="mono uppercase"
