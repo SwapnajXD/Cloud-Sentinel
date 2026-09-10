@@ -47,3 +47,19 @@ def list_unencrypted_rds_instances(rds_client):
         })
 
     return findings
+
+
+def scan(clients, region):
+    from scans.common import check, inventory
+    findings = []
+    for db in inventory(clients['rds'], 'describe_db_instances', 'DBInstances'):
+        name = db['DBInstanceIdentifier']
+        public = db['PubliclyAccessible']
+        encrypted = db['StorageEncrypted']
+        findings.append(check('RDSPubliclyAccessible', 'RDS', name, 'FAIL' if public else 'PASS', 'RDS public accessibility',
+                              f'PubliclyAccessible={public}. Actual reachability also depends on routing and network controls.',
+                              'Disable public accessibility unless required and restrict network access.', region=region))
+        findings.append(check('RDSEncryption', 'RDS', name, 'PASS' if encrypted else 'FAIL', 'RDS storage encryption',
+                              f'StorageEncrypted={encrypted}; engine={db["Engine"]}.',
+                              'Restore from an encrypted snapshot to enable encryption for an existing instance.', region=region))
+    return findings

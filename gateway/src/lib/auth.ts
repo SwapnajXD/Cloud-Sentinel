@@ -1,44 +1,24 @@
 import jwt from 'jsonwebtoken';
 import { Request, Response, NextFunction } from 'express';
 
-// No insecure fallback: fail loudly at startup instead of silently signing
-// tokens with a well-known default secret.
-const rawSecret = process.env.JWT_SECRET;
-
-if (!rawSecret) {
-  throw new Error(
-    'JWT_SECRET is not set. Set a strong, random value in your environment before starting the gateway.'
-  );
+const secret = process.env.JWT_SECRET;
+if (!secret || (process.env.NODE_ENV !== 'test' && (secret.length < 32 || secret.startsWith('change-me')))) {
+  throw new Error('JWT_SECRET must contain at least 32 characters of securely generated randomness');
 }
-
-// Re-bind to a definitely-string const so TS narrows it correctly in the
-// functions below (module-level `if` checks don't narrow across closures).
-const JWT_SECRET: string = rawSecret;
-
-interface TokenPayload {
-  id: number;
-  email: string;
-  iat?: number;
-  exp?: number;
+const JWT_SECRET: string = secret;
+export interface TokenPayload { id: number; email: string; iat?: number; exp?: number }
+export function signToken(payload: Omit<TokenPayload, 'iat' | 'exp'>): string {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn: '1h', algorithm: 'HS256' });
 }
-
-function signToken(payload: Omit<TokenPayload, 'iat' | 'exp'>): string {
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '1h' });
-}
-
-function authenticateJWT(req: Request, res: Response, next: NextFunction): Response<any> | void {
-  const auth = req.headers && req.headers.authorization;
-  if (!auth || !auth.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'missing token' });
-  }
-  const token = auth.split(' ')[1];
+export function authenticateJWT(req: Request, res: Response, next: NextFunction): void {
+  const match = /^Bearer ([^ ]+)$/.exec(req.headers.authorization || '');
+  if (!match) { res.status(401).json({ error: 'missing token' }); return; }
   try {
-    const payload = jwt.verify(token, JWT_SECRET) as TokenPayload;
-    (req as any).user = payload;
-    return next();
-  } catch (err) {
-    return res.status(401).json({ error: 'invalid token' });
-  }
+    const payload = jwt.verify(match[1], JWT_SECRET, { algorithms: ['HS256'] });
+    if (typeof payload === 'string' || !Number.isSafeInteger(payload.id) || payload.id < 1 || typeof payload.email !== 'string' || !payload.exp) {
+      throw new Error('invalid claims');
+    }
+    req.user = payload as TokenPayload;
+    next();
+  } catch { res.status(401).json({ error: 'invalid token' }); }
 }
-
-export { signToken, authenticateJWT, TokenPayload };

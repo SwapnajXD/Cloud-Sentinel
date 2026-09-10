@@ -1,484 +1,292 @@
+"""Postgres is the durable queue; Redis provides low-latency wakeups only.
+
+Claims use SKIP LOCKED and renewable, fenced leases. Completing the report and
+job in one transaction makes a retried delivery idempotent. An expired worker
+can never publish results over a newer lease.
+"""
 import json
-import psycopg2
 import os
-import time
-import sys
 import threading
+import time
 import uuid
-import boto3
-import redis
+from pathlib import Path
 from datetime import datetime, timezone
 
-# ✅ Fix Python path
-sys.path.append(os.path.abspath(os.path.dirname(__file__)))
+import boto3
+from botocore.config import Config
+import psycopg2
+from psycopg2.extras import RealDictCursor, Json
+import redis
 
+from services.database import ensure_schema
 from services.audit import build_audit_report
 
-
-# =========================
-# ✅ Environment config
-# =========================
-
-REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
-
-DATABASE_URL = os.getenv(
-    "DATABASE_URL",
-    "postgres://postgres:postgres@db:5432/cloud_sentinel"
-)
-
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-FLOCI_ENDPOINT = os.getenv("FLOCI_ENDPOINT", None)
-
-SCHEDULER_POLL_SECONDS = int(os.getenv("SCHEDULER_POLL_SECONDS", "60"))
+DATABASE_URL = os.getenv('DATABASE_URL', '')
+REDIS_URL = os.getenv('REDIS_URL', 'redis://localhost:6379')
+AWS_REGION = os.getenv('AWS_REGION', 'us-east-1')
+FLOCI_ENDPOINT = os.getenv('FLOCI_ENDPOINT')
+MAX_TASK_RETRIES = max(0, int(os.getenv('MAX_TASK_RETRIES', '3')))
+TASK_RETRY_DELAY_SECONDS = max(1, int(os.getenv('TASK_RETRY_DELAY_SECONDS', '5')))
+SCHEDULER_POLL_SECONDS = max(1, int(os.getenv('SCHEDULER_POLL_SECONDS', '30')))
+LEASE_SECONDS = max(30, int(os.getenv('JOB_LEASE_SECONDS', '120')))
+WORKER_ID = str(uuid.uuid4())
+SERVICES = ['s3', 'ec2', 'iam', 'rds', 'lambda']
 
 
-# =========================
-# ✅ Clients
-# =========================
-def get_redis_client():
-    return redis.from_url(REDIS_URL)
+def log(event, **fields):
+    print(json.dumps({'timestamp': datetime.now(timezone.utc).isoformat(), 'event': event, **fields}), flush=True)
+
+
+def safe_error(error):
+    # SDK response messages can include URLs/policies. Log stable codes only.
+    response = getattr(error, 'response', {})
+    return response.get('Error', {}).get('Code', type(error).__name__)
 
 
 def get_db_connection():
-    return psycopg2.connect(DATABASE_URL)
+    return psycopg2.connect(DATABASE_URL, connect_timeout=5)
 
 
-def get_aws_clients(mode="aws", role_arn=None, external_id=None):
-    if mode == "floci":
+def get_redis_client():
+    return redis.from_url(REDIS_URL, socket_connect_timeout=2, socket_timeout=5)
+
+
+def get_aws_clients(mode='aws', role_arn=None, external_id=None, region=None):
+    region = region or AWS_REGION
+    config = Config(connect_timeout=5, read_timeout=15, retries={'max_attempts': 3, 'mode': 'standard'})
+    if mode == 'floci':
         if not FLOCI_ENDPOINT:
-            raise ValueError("FLOCI_ENDPOINT not set")
-
-        print(f"[MODE] ⚡ Using FLOCI at {FLOCI_ENDPOINT}")
-        session = boto3.Session(region_name=AWS_REGION)
-
-        return {
-            "s3": session.client("s3", endpoint_url=FLOCI_ENDPOINT),
-            "ec2": session.client("ec2", endpoint_url=FLOCI_ENDPOINT),
-            "iam": session.client("iam", endpoint_url=FLOCI_ENDPOINT),
-            "sts": session.client("sts", endpoint_url=FLOCI_ENDPOINT),
-            "rds": session.client("rds", endpoint_url=FLOCI_ENDPOINT),
-            "lambda": session.client("lambda", endpoint_url=FLOCI_ENDPOINT),
-        }
-
-    if role_arn:
-        # Cross-account scan: assume the connected account's read-only
-        # role using its External ID, then build every client from the
-        # TEMPORARY credentials that come back - never from the worker's
-        # own long-lived credentials directly. Nothing about this session
-        # is persisted; it's used for this one scan and discarded.
-        print(f"[MODE] ☁️ Assuming role {role_arn}")
-        sts = boto3.client("sts", region_name=AWS_REGION)
-        assumed = sts.assume_role(
-            RoleArn=role_arn,
-            RoleSessionName="cloud-sentinel-scan",
-            ExternalId=external_id,
-            DurationSeconds=3600,
-        )
-        creds = assumed["Credentials"]
-        session = boto3.Session(
-            aws_access_key_id=creds["AccessKeyId"],
-            aws_secret_access_key=creds["SecretAccessKey"],
-            aws_session_token=creds["SessionToken"],
-            region_name=AWS_REGION,
-        )
+            raise ValueError('FLOCI_ENDPOINT not set')
+        session = boto3.Session(region_name=region, aws_access_key_id='testing', aws_secret_access_key='testing')
+    elif role_arn:
+        if not external_id:
+            raise ValueError('External ID required')
+        result = boto3.client('sts', region_name=region, config=config).assume_role(
+            RoleArn=role_arn, ExternalId=external_id, RoleSessionName='cloud-sentinel-scan', DurationSeconds=3600)
+        creds = result['Credentials']
+        session = boto3.Session(region_name=region, aws_access_key_id=creds['AccessKeyId'],
+                                aws_secret_access_key=creds['SecretAccessKey'], aws_session_token=creds['SessionToken'])
     else:
-        print("[MODE] ☁️ Using REAL AWS (static credentials)")
-        session = boto3.Session(region_name=AWS_REGION)
-
-    return {
-        "s3": session.client("s3"),
-        "ec2": session.client("ec2"),
-        "iam": session.client("iam"),
-        "sts": session.client("sts"),
-        "rds": session.client("rds"),
-        "lambda": session.client("lambda"),
-    }
-
-
-# =========================
-# ✅ Schema
-# =========================
-# Shared with the gateway's app.ts SCHEMA_LOCK_KEY - an arbitrary constant
-# both processes use to serialize schema setup against each other.
-# CREATE TABLE IF NOT EXISTS is NOT safe against two processes racing to
-# create the same table for the first time: both can pass the "does it
-# exist?" check concurrently, then collide creating the underlying SERIAL
-# sequence (duplicate key on pg_class_relname_nsp_index). The gateway and
-# worker both run schema setup on startup - the worker's scheduler thread
-# calls this immediately on boot, not just per-task - so without this lock
-# they can, and did in practice, race each other on a freshly-added table.
-SCHEMA_LOCK_KEY = 727001
-
-
-def ensure_schema(conn):
-    with conn.cursor() as cursor:
-        cursor.execute("SELECT pg_advisory_lock(%s)", (SCHEMA_LOCK_KEY,))
-
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS audit_reports (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                report JSONB NOT NULL,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        cursor.execute(
-            """
-            CREATE INDEX IF NOT EXISTS idx_audit_reports_user_created
-            ON audit_reports (user_id, created_at DESC)
-            """
-        )
-        # Mirrors the table the gateway creates on startup. IF NOT EXISTS
-        # makes this safe regardless of which service starts first.
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS audit_tasks (
-                task_id TEXT PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                status TEXT NOT NULL DEFAULT 'queued',
-                mode TEXT NOT NULL DEFAULT 'aws',
-                report_id INTEGER REFERENCES audit_reports(id) ON DELETE SET NULL,
-                error TEXT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        # Mirrors the table the gateway creates for recurring scans.
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS scheduled_scans (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                mode TEXT NOT NULL DEFAULT 'aws',
-                interval_hours INTEGER NOT NULL,
-                next_run_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        # Mirrors the table the gateway creates for cross-account
-        # connections (see infra/cloudformation/).
-        cursor.execute(
-            """
-            CREATE TABLE IF NOT EXISTS aws_connections (
-                id SERIAL PRIMARY KEY,
-                user_id INTEGER NOT NULL,
-                role_arn TEXT NOT NULL,
-                external_id TEXT NOT NULL,
-                label TEXT,
-                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-            )
-            """
-        )
-        # ALTER rather than baked into the CREATE TABLE statements above so
-        # this upgrades existing databases too, not just fresh ones.
-        cursor.execute(
-            """
-            ALTER TABLE audit_tasks
-            ADD COLUMN IF NOT EXISTS connection_id INTEGER REFERENCES aws_connections(id) ON DELETE SET NULL
-            """
-        )
-        cursor.execute(
-            """
-            ALTER TABLE scheduled_scans
-            ADD COLUMN IF NOT EXISTS connection_id INTEGER REFERENCES aws_connections(id) ON DELETE SET NULL
-            """
-        )
-
-        cursor.execute("SELECT pg_advisory_unlock(%s)", (SCHEMA_LOCK_KEY,))
-    conn.commit()
-
-
-def update_task_status(conn, task_id, status, report_id=None, error=None):
-    """Best-effort status update. Older/manually-queued tasks may not have a
-    task_id (e.g. before this field existed) - silently skip those rather
-    than failing the whole audit over a missing tracking row."""
-    if not task_id:
-        return
-
-    with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            UPDATE audit_tasks
-            SET status = %s, report_id = COALESCE(%s, report_id), error = %s, updated_at = NOW()
-            WHERE task_id = %s
-            """,
-            (status, report_id, error, task_id),
-        )
-    conn.commit()
-
-
-# =========================
-# ✅ Save report
-# =========================
-def save_audit_report(conn, task, report):
-    with conn.cursor() as cursor:
-        cursor.execute(
-            """
-            INSERT INTO audit_reports (user_id, report)
-            VALUES (%s, %s)
-            RETURNING id
-            """,
-            (task["user_id"], json.dumps(report)),
-        )
-        report_id = cursor.fetchone()[0]
-
-    conn.commit()
-    return report_id
-
-
-def get_latest_report(conn, user_id):
-    """Returns the user's most recent report (already-parsed JSONB dict),
-    or None if they have no prior scans. Called before a new scan runs, so
-    "most recent" naturally means "the one before this one" - no
-    special-casing needed."""
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT report FROM audit_reports WHERE user_id = %s ORDER BY created_at DESC LIMIT 1",
-            (user_id,),
-        )
-        row = cursor.fetchone()
-    return row[0] if row else None
+        session = boto3.Session(region_name=region)
+    options = {'endpoint_url': FLOCI_ENDPOINT} if mode == 'floci' else {}
+    return {service: session.client(service, config=config, **options) for service in SERVICES + ['sts', 's3control']}
 
 
 def get_aws_connection(conn, connection_id, user_id):
-    """Returns {"role_arn": ..., "external_id": ...} for this connection,
-    or None if it doesn't exist or doesn't belong to this user."""
-    with conn.cursor() as cursor:
-        cursor.execute(
-            "SELECT role_arn, external_id FROM aws_connections WHERE id = %s AND user_id = %s",
-            (connection_id, user_id),
-        )
-        row = cursor.fetchone()
-    if not row:
-        return None
-    return {"role_arn": row[0], "external_id": row[1]}
-
-
-# =========================
-# ✅ Task processing
-# =========================
-def process_task(task, conn=None, aws_clients=None):
-    if task.get("action") != "start_audit":
-        return {"status": "ignored"}
-
-    mode = task.get("mode", "aws")
-    task_id = task.get("task_id")
-    should_close = conn is None
-
-    start_time = time.time()
-
-    try:
-        print("=" * 60)
-        print(f"[TASK RECEIVED] {task}")
-        print(f"[AUDIT START] user={task['user_id']} mode={mode}")
-
-        # Built inside the try: a misconfigured FLOCI_ENDPOINT, an unknown
-        # connection, or an unreachable DB should fail *this task* (and go
-        # through the normal retry/dead-letter path below), not crash the
-        # whole worker loop.
-        conn = conn or get_db_connection()
-
-        if aws_clients is None:
-            role_arn = None
-            external_id = None
-            connection_id = task.get("connection_id")
-            if connection_id:
-                connection = get_aws_connection(conn, connection_id, task["user_id"])
-                if not connection:
-                    raise ValueError(f"AWS connection {connection_id} not found")
-                role_arn = connection["role_arn"]
-                external_id = connection["external_id"]
-            aws_clients = get_aws_clients(mode, role_arn=role_arn, external_id=external_id)
-
-        ensure_schema(conn)
-        update_task_status(conn, task_id, "running")
-
-        previous_report = get_latest_report(conn, task["user_id"])
-        report = build_audit_report(task, aws_clients, mode=mode, previous_report=previous_report)
-
-        findings = report.get("findings", []) if isinstance(report, dict) else []
-        print(f"[FINDINGS] count={len(findings)}")
-
-        report_id = save_audit_report(conn, task, report)
-        update_task_status(conn, task_id, "done", report_id=report_id)
-
-        duration = time.time() - start_time
-
-        metrics = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "user_id": task["user_id"],
-            "mode": mode,
-            "report_id": report_id,
-            "findings_count": len(findings),
-            "duration_sec": round(duration, 2),
-        }
-
-        print(f"[AUDIT COMPLETE] report_id={report_id} time={duration:.2f}s")
-        print(f"[METRICS] {json.dumps(metrics)}")
-        print("=" * 60)
-
-        return {"status": "ok", "report_id": report_id}
-
-    except Exception as e:
-        duration = time.time() - start_time
-        print(f"[AUDIT ERROR] user={task['user_id']} error={str(e)}")
-        print(f"[FAILED AFTER] {duration:.2f}s")
-        return {"status": "error", "error": str(e)}
-
-    finally:
-        if should_close and conn is not None:
-            conn.close()
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute('SELECT role_arn,external_id,label FROM aws_connections WHERE id=%s AND user_id=%s AND active', (connection_id, user_id))
+        return cursor.fetchone()
 
 
 def parse_task(payload):
-    """Decode a raw Redis payload (bytes or str) into a task dict."""
-    if isinstance(payload, bytes):
-        payload = payload.decode("utf-8")
-    return json.loads(payload)
+    return json.loads(payload.decode('utf-8') if isinstance(payload, bytes) else payload)
 
 
-MAX_TASK_RETRIES = int(os.getenv("MAX_TASK_RETRIES", "3"))
-TASK_RETRY_DELAY_SECONDS = int(os.getenv("TASK_RETRY_DELAY_SECONDS", "5"))
-DEAD_LETTER_QUEUE = "audit_tasks_dead"
+def claim_task(conn):
+    """Recover expired leases and atomically claim one due task."""
+    token = str(uuid.uuid4())
+    with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+        cursor.execute("""UPDATE audit_tasks SET status=CASE WHEN attempts > %s THEN 'error' ELSE 'queued' END,
+            error='Worker lease expired', progress='Recovering interrupted scan', lease_token=NULL,lease_until=NULL,updated_at=NOW()
+            WHERE status='running' AND lease_until < NOW()""", (MAX_TASK_RETRIES,))
+        cursor.execute("""WITH candidate AS (
+            SELECT task_id FROM audit_tasks WHERE status='queued' AND available_at<=NOW()
+            ORDER BY available_at,created_at FOR UPDATE SKIP LOCKED LIMIT 1
+        ) UPDATE audit_tasks t SET status='running',attempts=attempts+1,lease_token=%s,
+            lease_until=NOW()+make_interval(secs=>%s),updated_at=NOW(),progress='Connecting to AWS',error=NULL
+            FROM candidate c WHERE t.task_id=c.task_id RETURNING t.*""", (token, LEASE_SECONDS))
+        row = cursor.fetchone()
+    conn.commit()
+    return dict(row) if row else None
 
 
-def handle_task_failure(client, task, error_message):
-    """Requeue a failed task with backoff up to MAX_TASK_RETRIES, then move
-    it to a dead-letter list and mark it permanently failed in the DB rather
-    than retrying (or silently dropping it) forever."""
-    retries = task.get("_retries", 0)
-    task_id = task.get("task_id")
-
-    if retries < MAX_TASK_RETRIES:
-        task = {**task, "_retries": retries + 1}
-        print(
-            f"[RETRY] task_id={task_id} attempt={retries + 1}/{MAX_TASK_RETRIES} "
-            f"in {TASK_RETRY_DELAY_SECONDS}s"
-        )
-        time.sleep(TASK_RETRY_DELAY_SECONDS)
-        client.lpush("audit_tasks", json.dumps(task))
-        return
-
-    print(f"[DEAD-LETTER] task_id={task_id} exceeded {MAX_TASK_RETRIES} retries: {error_message}")
-    client.lpush(DEAD_LETTER_QUEUE, json.dumps({**task, "final_error": error_message}))
-
-    if task_id:
-        conn = get_db_connection()
-        try:
-            ensure_schema(conn)
-            update_task_status(conn, task_id, "error", error=error_message)
-        finally:
-            conn.close()
-
-
-# =========================
-# ✅ Scheduler (recurring scans)
-# =========================
-def run_scheduler():
-    """Runs in its own thread. Every SCHEDULER_POLL_SECONDS, checks for
-    scheduled_scans rows that have come due and enqueues them exactly like
-    a manually-triggered scan (same audit_tasks row, same Redis push) -
-    scheduled and manual scans are indistinguishable once queued."""
-    print(f"⏰ Scheduler started, polling every {SCHEDULER_POLL_SECONDS}s")
-
-    while True:
-        try:
-            _check_due_schedules()
-        except Exception as e:
-            print(f"❌ Scheduler error: {e}")
-
-        time.sleep(SCHEDULER_POLL_SECONDS)
-
-
-def _check_due_schedules():
+def renew_lease(task_id, token, progress=None):
     conn = get_db_connection()
-    redis_client = get_redis_client()
-
     try:
-        ensure_schema(conn)
-
         with conn.cursor() as cursor:
-            cursor.execute(
-                """
-                SELECT id, user_id, mode, interval_hours
-                FROM scheduled_scans
-                WHERE next_run_at <= NOW()
-                """
-            )
-            due = cursor.fetchall()
-
-        for schedule_id, user_id, mode, interval_hours in due:
-            task_id = str(uuid.uuid4())
-            task = {
-                "task_id": task_id,
-                "action": "start_audit",
-                "user_id": user_id,
-                "requested_at": datetime.now(timezone.utc).isoformat(),
-                "mode": mode,
-                "params": {"scope": "scheduled", "schedule_id": schedule_id},
-            }
-
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    "INSERT INTO audit_tasks (task_id, user_id, status, mode) VALUES (%s, %s, %s, %s)",
-                    (task_id, user_id, "queued", mode),
-                )
-                cursor.execute(
-                    "UPDATE scheduled_scans SET next_run_at = NOW() + make_interval(hours => %s) WHERE id = %s",
-                    (interval_hours, schedule_id),
-                )
-            conn.commit()
-
-            redis_client.lpush("audit_tasks", json.dumps(task))
-            print(f"[SCHEDULED SCAN QUEUED] schedule_id={schedule_id} user={user_id} mode={mode} task_id={task_id}")
+            cursor.execute("""UPDATE audit_tasks SET lease_until=NOW()+make_interval(secs=>%s),
+                progress=COALESCE(%s,progress),updated_at=NOW() WHERE task_id=%s AND lease_token=%s AND status='running' AND lease_until>NOW()""",
+                           (LEASE_SECONDS, progress, task_id, token))
+            alive = cursor.rowcount == 1
+        conn.commit()
+        return alive
     finally:
         conn.close()
 
 
-# =========================
-# ✅ Worker loop
-# =========================
-def run_worker():
-    client = get_redis_client()
-    print("🚀 Worker started, listening for audit_tasks...")
+def complete_task(conn, row, report):
+    """Fence stale workers, then persist report and terminal state atomically."""
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT task_id FROM audit_tasks WHERE task_id=%s AND lease_token=%s AND status='running' AND lease_until>NOW() FOR UPDATE", (row['task_id'], row['lease_token']))
+        if not cursor.fetchone():
+            conn.rollback()
+            return None
+        cursor.execute('INSERT INTO audit_reports(user_id,task_id,report) VALUES (%s,%s,%s) ON CONFLICT(task_id) DO UPDATE SET task_id=EXCLUDED.task_id RETURNING id',
+                       (row['user_id'], row['task_id'], Json(report)))
+        report_id = cursor.fetchone()[0]
+        cursor.execute("UPDATE audit_tasks SET status=%s,report_id=%s,progress='Assessment complete',lease_token=NULL,lease_until=NULL,updated_at=NOW() WHERE task_id=%s",
+                       ('partial' if report.get('partial') else 'done', report_id, row['task_id']))
+    conn.commit()
+    return report_id
 
+
+def fail_task(conn, row, error):
+    conn.rollback()
+    retry = row['attempts'] <= MAX_TASK_RETRIES
+    delay = min(300, TASK_RETRY_DELAY_SECONDS * 2 ** (row['attempts'] - 1))
+    with conn.cursor() as cursor:
+        cursor.execute("""UPDATE audit_tasks SET status=%s,error=%s,progress=%s,available_at=NOW()+make_interval(secs=>%s),
+            lease_token=NULL,lease_until=NULL,updated_at=NOW() WHERE task_id=%s AND lease_token=%s AND status='running'""",
+                       ('queued' if retry else 'error', error, 'Waiting to retry' if retry else 'Scan failed', delay, row['task_id'], row['lease_token']))
+    conn.commit()
+    log('scan_retry' if retry else 'scan_failed', task_id=row['task_id'], attempt=row['attempts'], reason=error)
+
+
+def get_latest_report(conn, user_id, context):
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT report FROM audit_reports WHERE user_id=%s AND report->'context'=%s::jsonb ORDER BY created_at DESC LIMIT 1", (user_id, Json(context)))
+        row = cursor.fetchone()
+        return row[0] if row else None
+
+
+def process_task(row, conn=None, aws_clients=None):
+    owned = conn is None
+    conn = conn or get_db_connection()
+    task = dict(row['payload'])
+    task.update(task_id=row['task_id'], user_id=row['user_id'], mode=row['mode'], connection_id=row['connection_id'])
+    start = time.monotonic()
+    stop = threading.Event()
+    lost = threading.Event()
+
+    def heartbeat():
+        while not stop.wait(LEASE_SECONDS / 3):
+            try:
+                if not renew_lease(row['task_id'], row['lease_token']):
+                    lost.set()
+                    return
+            except Exception:
+                lost.set()  # conservative: don't publish if ownership cannot be established
+                return
+
+    thread = threading.Thread(target=heartbeat, daemon=True)
+    thread.start()
+    try:
+        connection = None
+        if task.get('connection_id') is not None:
+            connection = get_aws_connection(conn, task['connection_id'], task['user_id'])
+            if connection is None:
+                raise ValueError('Selected AWS connection is disconnected or unavailable')
+        clients = aws_clients or get_aws_clients(task['mode'], role_arn=connection['role_arn'] if connection else None,
+                                                external_id=connection['external_id'] if connection else None, region=task.get('region'))
+        identity = clients['sts'].get_caller_identity()
+        context = {'account_id': identity['Account'], 'connection_id': task.get('connection_id'),
+                   'region': task.get('region') or AWS_REGION, 'mode': task['mode'],
+                   'services': sorted(task.get('services') or SERVICES), 'schema_version': 2}
+        task['context'] = context
+        task['connection_label'] = connection['label'] if connection else 'Worker identity'
+        log('scan_started', task_id=row['task_id'], attempt=row['attempts'], **context)
+        previous = get_latest_report(conn, task['user_id'], context)
+        conn.commit()  # never hold a read transaction open throughout AWS calls
+
+        def progress(service):
+            if lost.is_set() or not renew_lease(row['task_id'], row['lease_token'], f'Checking {service.upper()}'):
+                raise RuntimeError('Job lease lost')
+
+        report = build_audit_report(task, clients, mode=task['mode'], previous_report=previous, progress=progress)
+        report['duration_sec'] = round(time.monotonic() - start, 2)
+        if lost.is_set():
+            raise RuntimeError('Job lease lost')
+        report_id = complete_task(conn, row, report)
+        log('scan_completed' if report_id else 'scan_discarded', task_id=row['task_id'], report_id=report_id,
+            duration_sec=report['duration_sec'], partial=report.get('partial'), **context)
+        return {'status': 'ok' if report_id else 'stale', 'report_id': report_id}
+    except Exception as error:
+        reason = str(error) if isinstance(error, (ValueError, RuntimeError)) else safe_error(error)
+        fail_task(conn, row, reason)
+        return {'status': 'error', 'error': reason}
+    finally:
+        stop.set()
+        thread.join(timeout=6)
+        if owned:
+            conn.close()
+
+
+def _check_due_schedules():
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("SELECT * FROM scheduled_scans WHERE enabled AND next_run_at<=NOW() ORDER BY next_run_at FOR UPDATE SKIP LOCKED LIMIT 100")
+            for schedule in cursor.fetchall():
+                task_id = str(uuid.uuid4())
+                task = {'task_id': task_id, 'action': 'start_audit', 'user_id': schedule['user_id'],
+                        'mode': schedule['mode'], 'connection_id': schedule['connection_id'],
+                        'region': schedule['region'], 'services': schedule['services'],
+                        'requested_at': datetime.now(timezone.utc).isoformat(), 'params': {'scope': 'selected-services', 'schedule_id': schedule['id']}}
+                cursor.execute('INSERT INTO audit_tasks(task_id,user_id,mode,connection_id,payload) VALUES (%s,%s,%s,%s,%s)',
+                               (task_id, schedule['user_id'], schedule['mode'], schedule['connection_id'], Json(task)))
+                cursor.execute('UPDATE scheduled_scans SET next_run_at=NOW()+make_interval(hours=>interval_hours),last_run_at=NOW(),last_task_id=%s WHERE id=%s', (task_id, schedule['id']))
+        conn.commit()  # durable jobs and schedule advancement commit together
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def maintenance():
+    last_schedule = 0.0
     while True:
         try:
-            item = client.brpop("audit_tasks", timeout=0)
+            conn = get_db_connection()
+            try:
+                with conn.cursor() as cursor:
+                    cursor.execute('INSERT INTO worker_heartbeats(worker_id) VALUES (%s) ON CONFLICT(worker_id) DO UPDATE SET updated_at=NOW()', (WORKER_ID,))
+                    cursor.execute("DELETE FROM worker_heartbeats WHERE updated_at<NOW()-INTERVAL '1 day'")
+                conn.commit()
+            finally:
+                conn.close()
+            Path(os.getenv('WORKER_HEARTBEAT_FILE', '/tmp/sentinel-worker-heartbeat')).touch()
+            if time.monotonic() - last_schedule >= SCHEDULER_POLL_SECONDS:
+                _check_due_schedules()
+                last_schedule = time.monotonic()
+        except Exception as error:
+            log('maintenance_failed', reason=safe_error(error))
+        time.sleep(min(20, SCHEDULER_POLL_SECONDS))
 
-            if item is None:
-                continue
 
-            _, payload = item
-            task = parse_task(payload)
-
-            result = process_task(task)
-            print("[RESULT]", result)
-
-            if result.get("status") == "error":
-                handle_task_failure(client, task, result.get("error"))
-
-        except redis.exceptions.TimeoutError:
-            continue
-
-        except Exception as e:
-            print(f"❌ Worker crash: {e}")
+def main():
+    while True:
+        try:
+            conn = get_db_connection()
+            try:
+                ensure_schema(conn)
+            finally:
+                conn.close()
+            break
+        except Exception as error:
+            log('startup_failed', reason=safe_error(error))
+            time.sleep(5)
+    threading.Thread(target=maintenance, daemon=True).start()
+    client = get_redis_client()
+    log('worker_started', worker_id=WORKER_ID)
+    while True:
+        try:
+            conn = get_db_connection()
+            try:
+                row = claim_task(conn)
+                if row:
+                    process_task(row, conn=conn)
+                    continue
+            finally:
+                conn.close()
+            try:
+                client.brpop('audit_tasks', timeout=2)
+            except redis.RedisError:
+                time.sleep(2)
+        except Exception as error:
+            log('worker_iteration_failed', reason=safe_error(error))
             time.sleep(2)
 
 
-# =========================
-# ✅ Entry
-# =========================
-def main():
-    scheduler_thread = threading.Thread(target=run_scheduler, daemon=True)
-    scheduler_thread.start()
-
-    run_worker()
-
-
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()

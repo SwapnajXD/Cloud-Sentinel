@@ -1,34 +1,19 @@
-// Thin process entry point. All routes/middleware live in app.ts so that
-// tests can import the Express app directly via supertest without
-// triggering a real Postgres/Redis connection or an app.listen() call -
-// this file is the only place that actually does either of those things.
-import { app, pool, redisClient, initDb, waitForPostgres } from './app';
-
-const PORT = process.env.PORT || 3000;
-
-async function start(): Promise<void> {
-  try {
-    await waitForPostgres();
-    await initDb();
-
-    if (!redisClient.isOpen) {
-      await redisClient.connect();
-    }
-
-    app.listen(PORT, () => {
-      console.log(`Cloud-Sentinel running on port ${PORT}`);
-    });
-  } catch (err) {
-    console.error(err);
-    process.exit(1);
-  }
+import { app, pool, redisClient, initDb, waitForPostgres, log } from './app';
+async function start() {
+  await waitForPostgres();
+  await initDb();
+  // Redis is an accelerator; accepting durable tasks must not require it.
+  void redisClient.connect().catch(() => log('redis_connect_deferred'));
+  const server = app.listen(Number(process.env.PORT || 3000), () => log('gateway_started'));
+  let stopping = false;
+  const shutdown = () => {
+    if (stopping) return;
+    stopping = true;
+    log('gateway_stopping');
+    server.close(() => { void Promise.all([pool.end(), redisClient.isOpen ? redisClient.disconnect() : Promise.resolve()]).then(() => process.exit(0)); });
+    setTimeout(() => process.exit(1), 10000).unref();
+  };
+  process.on('SIGINT', shutdown);
+  process.on('SIGTERM', shutdown);
 }
-
-process.on('SIGINT', async () => {
-  console.log('Shutting down...');
-  await redisClient.disconnect();
-  await pool.end();
-  process.exit(0);
-});
-
-start();
+start().catch(error => { log('startup_failed', { reason: error instanceof Error ? error.message : 'Unknown startup error' }); process.exit(1); });

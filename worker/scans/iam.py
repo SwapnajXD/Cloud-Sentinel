@@ -1,117 +1,59 @@
+from datetime import datetime, timezone
+from scans.common import check, guarded, inventory, absent
+
+
 def check_mfa_for_current_user(iam_client, sts_client):
-    caller = sts_client.get_caller_identity()
-    arn = caller.get("Arn", "")
-    user_name = None
-
-    if ":user/" in arn:
-        user_name = arn.split("/", 1)[1]
-
-    if not user_name:
-        return {
-            "enabled": False,
-            "status": "unavailable",
-            "details": "Not an IAM user",
-        }
-
-    response = iam_client.list_mfa_devices(UserName=user_name)
-
-    enabled = len(response.get("MFADevices", [])) > 0
-
-    return {
-        "enabled": enabled,
-        "status": "enabled" if enabled else "disabled",
-        "user_name": user_name,
-    }
+    arn = sts_client.get_caller_identity().get('Arn', '')
+    if ':user/' not in arn:
+        return {'enabled': None, 'status': 'not_applicable', 'details': 'Scanner is a root or role identity, not an IAM user'}
+    user_name = arn.rsplit('/', 1)[-1]
+    devices = inventory(iam_client, 'list_mfa_devices', 'MFADevices', UserName=user_name)
+    return {'enabled': bool(devices), 'status': 'enabled' if devices else 'disabled', 'user_name': user_name}
 
 
-def _list_all_users(iam_client):
-    users = []
-    if hasattr(iam_client, "get_paginator"):
-        paginator = iam_client.get_paginator("list_users")
-        for page in paginator.paginate():
-            users.extend(page.get("Users", []))
-    else:
-        users = iam_client.list_users().get("Users", [])
-    return users
-
-
-def list_users_without_mfa(iam_client):
-    """Account-wide MFA check: flags every IAM user without an MFA device,
-    not just the identity that happens to be running the scan. Complements
-    check_mfa_for_current_user, which only tells you about the scanner's
-    own credentials."""
+def scan(clients, region):
+    iam = clients['iam']
     findings = []
-
-    for user in _list_all_users(iam_client):
-        user_name = user.get("UserName")
-        devices = iam_client.list_mfa_devices(UserName=user_name).get("MFADevices", [])
-
-        if len(devices) == 0:
-            findings.append({
-                "type": "IAMUserMFA",
-                "resource": user_name,
-                "severity": "critical",
-                "details": f"IAM user '{user_name}' does not have MFA enabled",
-            })
-
-    return findings
-
-
-def check_root_mfa_enabled(iam_client, sts_client):
-    findings = []
-
-    account = sts_client.get_caller_identity()["Account"]
-
-    summary = iam_client.get_account_summary()
-    mfa_enabled = summary["SummaryMap"].get("AccountMFAEnabled", 0)
-
-    findings.append({
-        "type": "RootMFA",
-        "resource": account,
-        "severity": "critical" if mfa_enabled == 0 else "good",
-        "details": "Root MFA is disabled" if mfa_enabled == 0 else "Root MFA enabled",
-    })
-
-    return findings
-
-
-def check_unused_access_keys(iam_client, unused_after_days=90):
-    """Account-wide: flags access keys that have never been used, or
-    haven't been used in `unused_after_days` days, across EVERY IAM user -
-    not just whichever identity happens to be running the scan. Stale keys
-    are a common lateral-movement target since they're often forgotten but
-    still valid."""
-    from datetime import datetime, timezone
-
-    findings = []
-
-    for user in _list_all_users(iam_client):
-        user_name = user.get("UserName")
-        keys = iam_client.list_access_keys(UserName=user_name).get("AccessKeyMetadata", [])
-
-        for key in keys:
-            key_id = key.get("AccessKeyId")
-            status = key.get("Status")
-
-            last_used_resp = iam_client.get_access_key_last_used(AccessKeyId=key_id)
-            last_used = last_used_resp.get("AccessKeyLastUsed", {}).get("LastUsedDate")
-
-            if last_used is None:
-                findings.append({
-                    "type": "IAMUnusedAccessKey",
-                    "resource": key_id,
-                    "severity": "medium",
-                    "details": f"Key for user '{user_name}' has never been used (status: {status})",
-                })
-                continue
-
-            age_days = (datetime.now(timezone.utc) - last_used).days
-            if age_days >= unused_after_days:
-                findings.append({
-                    "type": "IAMUnusedAccessKey",
-                    "resource": key_id,
-                    "severity": "medium",
-                    "details": f"Key for user '{user_name}' last used {age_days} days ago (status: {status})",
-                })
-
+    def root():
+        account = clients['sts'].get_caller_identity()['Account']
+        enabled = iam.get_account_summary()['SummaryMap']['AccountMFAEnabled'] == 1
+        return [check('RootMFA', 'IAM', account, 'PASS' if enabled else 'FAIL', 'Root account MFA',
+                      'Root MFA enabled.' if enabled else 'Root MFA disabled.', 'Enable MFA for the AWS root user.')]
+    findings.extend(guarded('RootMFA', 'IAM', 'account', 'global', root))
+    try:
+        users = inventory(iam, 'list_users', 'Users')
+    except Exception as error:
+        from scans.common import error_code
+        findings.append(check('IAMInventory', 'IAM', 'users', 'UNKNOWN', 'IAM user inventory unavailable',
+                              f'AWS did not provide evidence ({error_code(error)}).'))
+        return findings
+    for user in users:
+        name = user['UserName']
+        def mfa():
+            try:
+                iam.get_login_profile(UserName=name)
+            except Exception as error:
+                if not absent(error, 'NoSuchEntity'):
+                    raise
+                return [check('IAMUserMFA', 'IAM', name, 'SKIPPED', 'Console user MFA', 'This IAM user has no console password. MFA device presence does not establish API credential protection.')]
+            devices = inventory(iam, 'list_mfa_devices', 'MFADevices', UserName=name)
+            return [check('IAMUserMFA', 'IAM', name, 'PASS' if devices else 'FAIL', 'Console user MFA',
+                          'Console password present; MFA ' + ('enabled.' if devices else 'disabled.'), 'Enable MFA for this console user.', console_user=True)]
+        findings.extend(guarded('IAMUserMFA', 'IAM', name, 'global', mfa))
+        def keys():
+            result = []
+            for key in inventory(iam, 'list_access_keys', 'AccessKeyMetadata', UserName=name):
+                key_id = key['AccessKeyId']
+                def assess_key():
+                    if key['Status'] != 'Active':
+                        return [check('IAMUnusedAccessKey', 'IAM', key_id, 'PASS', 'Unused access key', 'Key is inactive.', user_name=name)]
+                    last_used = iam.get_access_key_last_used(AccessKeyId=key_id).get('AccessKeyLastUsed', {}).get('LastUsedDate')
+                    since = last_used or key['CreateDate']
+                    age = (datetime.now(timezone.utc) - since).days
+                    return [check('IAMUnusedAccessKey', 'IAM', key_id, 'FAIL' if age >= 90 else 'PASS', 'Unused access key',
+                                  f"Key for user '{name}': active; {age} days since {'last use' if last_used else 'creation (never used)' }.",
+                                  'Deactivate unused keys after reviewing dependent workloads.', severity='medium', user_name=name)]
+                result.extend(guarded('IAMUnusedAccessKey', 'IAM', key_id, 'global', assess_key))
+            return result
+        findings.extend(guarded('IAMUnusedAccessKey', 'IAM', name, 'global', keys))
     return findings

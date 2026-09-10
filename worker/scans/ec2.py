@@ -1,7 +1,7 @@
+from scans.common import check, guarded, inventory
+
 def list_running_ec2_instances(ec2_client):
-    response = ec2_client.describe_instances(
-        Filters=[{"Name": "instance-state-name", "Values": ["running"]}]
-    )
+    response = {"Reservations": inventory(ec2_client, "describe_instances", "Reservations", Filters=[{"Name": "instance-state-name", "Values": ["running"]}])}
 
     instances = []
 
@@ -120,7 +120,7 @@ def check_open_security_groups(ec2_client):
     port 443, and the finding should say so, not just "critical" either way."""
     findings = []
 
-    response = ec2_client.describe_security_groups()
+    response = {"SecurityGroups": inventory(ec2_client, "describe_security_groups", "SecurityGroups")}
 
     for sg in response.get("SecurityGroups", []):
         for perm in sg.get("IpPermissions", []):
@@ -135,6 +135,7 @@ def check_open_security_groups(ec2_client):
             severity, title, description = classification
             findings.append({
                 "type": "SecurityGroupOpen",
+                "rule": {"protocol": perm.get("IpProtocol"), "from_port": perm.get("FromPort"), "to_port": perm.get("ToPort"), "cidrs": sorted(world_cidrs)},
                 "resource": sg.get("GroupId"),
                 "severity": severity,
                 "title": title,
@@ -142,3 +143,19 @@ def check_open_security_groups(ec2_client):
             })
 
     return findings
+
+
+def scan(clients, region):
+    ec2 = clients['ec2']
+    def instances():
+        return [check('EC2Instance', 'EC2', instance['instance_id'], 'SKIPPED', 'Running instance inventory',
+                              f"Type: {instance['type']}. Inventory only; running an instance is not itself a security failure.",
+                              region=region, security_groups=instance['security_groups'], public_ip=instance['public_ip'])
+                for instance in list_running_ec2_instances(ec2)]
+    def groups():
+        return [check(f['type'], 'EC2', f['resource'], 'FAIL', f['title'], f['details'],
+                              'Restrict ingress to trusted networks; review intended public services.', severity=f['severity'],
+                              region=region, identity=f['rule'], rule=f['rule'])
+                for f in check_open_security_groups(ec2)]
+    return (guarded('EC2InstanceInventory', 'EC2', 'instances', region, instances)
+            + guarded('SecurityGroupInventory', 'EC2', 'security groups', region, groups))

@@ -1,36 +1,17 @@
-import { signToken, authenticateJWT, TokenPayload } from '../gateway/src/lib/auth';
-import { Request, Response, NextFunction } from 'express';
-
-describe('auth helpers', () => {
-  test('signToken returns a string token and authenticateJWT accepts it', () => {
-    const token: string = signToken({ id: 42, email: 'test@example.com' });
-    expect(typeof token).toBe('string');
-
-    // mock req/res/next
-    const req = { headers: { authorization: `Bearer ${token}` } } as Partial<Request>;
-    const res = {
-      status: jest.fn().mockReturnThis(),
-      json: jest.fn().mockReturnThis(),
-    } as Partial<Response>;
-    const next = jest.fn() as NextFunction;
-
-    authenticateJWT(req as Request, res as Response, next);
-    expect(next).toHaveBeenCalled();
-    expect((req as any).user).toBeDefined();
-    expect((req as any).user.email).toBe('test@example.com');
-  });
-
-  test('authenticateJWT rejects missing or invalid token', () => {
-    const req1 = { headers: {} } as Partial<Request>;
-    const res1 = { status: jest.fn().mockReturnThis(), json: jest.fn() } as Partial<Response>;
-    const next1 = jest.fn() as NextFunction;
-    authenticateJWT(req1 as Request, res1 as Response, next1);
-    expect(res1.status).toHaveBeenCalledWith(401);
-
-    const req2 = { headers: { authorization: 'Bearer invalid.token.here' } } as Partial<Request>;
-    const res2 = { status: jest.fn().mockReturnThis(), json: jest.fn() } as Partial<Response>;
-    const next2 = jest.fn() as NextFunction;
-    authenticateJWT(req2 as Request, res2 as Response, next2);
-    expect(res2.status).toHaveBeenCalledWith(401);
-  });
+import { authenticateJWT, signToken } from '../gateway/src/lib/auth';
+import jwt from 'jsonwebtoken';
+import { Request, Response } from 'express';
+function verify(token?: string) {
+  const req = { headers: { authorization: token ? `Bearer ${token}` : undefined } } as Request;
+  const res = { status: jest.fn().mockReturnThis(), json: jest.fn() } as unknown as Response;
+  const next = jest.fn(); authenticateJWT(req, res, next); return { req, res, next };
+}
+test('accepts signed owner token', () => { const result = verify(signToken({ id: 1, email: 'a@b.com' })); expect(result.next).toHaveBeenCalled(); expect(result.req.user?.id).toBe(1); });
+test.each([undefined, 'invalid'])('rejects missing/invalid token', token => { expect(verify(token).res.status).toHaveBeenCalledWith(401); });
+test.each([{ id: '1', email: 'a@b.com' }, { id: 1 }, { id: -1, email: 'a@b.com' }])('rejects invalid claims %j', claims => {
+  expect(verify(jwt.sign(claims, process.env.JWT_SECRET!, { expiresIn: '1h' })).res.status).toHaveBeenCalledWith(401);
+});
+test('rejects expired tokens and wrong algorithms', () => {
+  expect(verify(jwt.sign({ id: 1, email: 'a@b.com' }, process.env.JWT_SECRET!, { expiresIn: -1 })).res.status).toHaveBeenCalledWith(401);
+  expect(verify(jwt.sign({ id: 1, email: 'a@b.com' }, process.env.JWT_SECRET!, { expiresIn: '1h', algorithm: 'HS384' })).res.status).toHaveBeenCalledWith(401);
 });

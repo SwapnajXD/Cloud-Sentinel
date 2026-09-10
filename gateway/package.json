@@ -1,19 +1,20 @@
 {
   "name": "cloud-sentinel-gateway",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Auth Gateway for Cloud-Sentinel - Node/Express API",
   "main": "dist/server.js",
   "scripts": {
     "start": "node dist/server.js",
-    "start:ts": "ts-node server.ts",
+    "start:ts": "ts-node src/server.ts",
     "build": "tsc",
-    "dev": "nodemon --exec ts-node server.ts",
+    "dev": "nodemon --exec ts-node src/server.ts",
     "dev:build": "tsc --watch",
     "pretest": "node -e \"const fs=require('fs');const p='../node_modules';if(!fs.existsSync(p))fs.symlinkSync('gateway/node_modules','../node_modules','dir')\"",
-    "test": "jest --runInBand"
+    "test": "jest --runInBand",
+    "typecheck": "tsc --noEmit"
   },
   "engines": {
-    "node": ">=16"
+    "node": ">=22 <27"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -47,13 +48,21 @@
   "jest": {
     "preset": "ts-jest",
     "testEnvironment": "node",
-    "roots": ["<rootDir>/../tests"],
+    "roots": [
+      "<rootDir>/../tests"
+    ],
     "testMatch": [
       "**/*.test.ts"
     ],
-    "setupFiles": ["<rootDir>/../tests/jest.setup.ts"],
-    "moduleDirectories": ["node_modules"],
-    "modulePaths": ["<rootDir>/node_modules"],
+    "setupFiles": [
+      "<rootDir>/../tests/jest.setup.ts"
+    ],
+    "moduleDirectories": [
+      "node_modules"
+    ],
+    "modulePaths": [
+      "<rootDir>/node_modules"
+    ],
     "moduleFileExtensions": [
       "ts",
       "js",
