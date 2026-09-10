@@ -124,9 +124,12 @@ Start the application:
 Run the tests:
 
 ```bash
-cd gateway && npm test
-cd ../worker && python -m unittest discover -s ../tests -p "test_worker.py"
+npm test --prefix gateway
+.venv/bin/python -m unittest discover -s tests -p "test_worker.py"
 ```
+
+See [Testing](docs/TESTING.md) for dependency setup, production build checks,
+and isolated PostgreSQL integration tests.
 
 ---
 
@@ -278,4 +281,3 @@ This project is licensed under the MIT License.
 ---
 
 ⭐ If you found this project interesting, consider starring the repository.
-# D2Bus dunno when we will start
