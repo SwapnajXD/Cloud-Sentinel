@@ -1,0 +1,15 @@
+.git
+**/.env
+**/.env.*
+.aws.env
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.next
+**/dist
+**/coverage
+**/test-results
+**/playwright-report
+.agents
+.codex

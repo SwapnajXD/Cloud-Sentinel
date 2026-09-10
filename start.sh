@@ -1,26 +1,14 @@
-#!/bin/bash
-
-set -e
-
-echo "🔐 Logging into AWS..."
-aws login
-
-echo "📦 Exporting AWS credentials..."
-aws configure export-credentials --format env > .aws.env
-
-echo "✅ Credentials saved to .aws.env"
-
-if [ ! -f infra/.env ]; then
-  echo "⚠️  infra/.env not found - copy infra/.env.example to infra/.env and fill it in"
-  echo "   (JWT_SECRET, ALLOWED_ORIGIN, POSTGRES_PASSWORD, etc. all live there)."
+#!/usr/bin/env bash
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+if [[ ! -f infra/.env ]]; then
+  echo 'Configure infra/.env from infra/.env.example before starting.' >&2
   exit 1
 fi
-
-echo "🐳 Starting Docker..."
-# Both files are needed: infra/.env carries JWT_SECRET/ALLOWED_ORIGIN/etc,
-# .aws.env carries the freshly-exported AWS credentials. Passing only one
-# --env-file would silently drop the other's variables from interpolation.
-sudo docker compose -f infra/docker-compose.yml \
-  --env-file infra/.env \
-  --env-file .aws.env \
-  up --build
+# Credential refresh is explicit. Production can use an instance/task role.
+if [[ "${1:-}" == '--refresh-aws' ]]; then
+  umask 077
+  aws configure export-credentials --format env > .aws.env.tmp
+  mv .aws.env.tmp .aws.env
+fi
+exec docker compose --env-file infra/.env -f infra/docker-compose.yml up --build

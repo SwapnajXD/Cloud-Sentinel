@@ -1,21 +1,10 @@
 FROM python:3.11-slim
-
 WORKDIR /app
-
-# ✅ System dependencies (Postgres driver)
-RUN apt-get update && apt-get install -y \
-    gcc \
-    libpq-dev \
-    && rm -rf /var/lib/apt/lists/*
-
-ENV PYTHONUNBUFFERED=1
-
-# ✅ Install Python dependencies
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
-
-# ✅ Copy worker code
-COPY . .
-
-# ✅ Start worker
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 MIGRATIONS_DIR=/app/migrations
+COPY worker/requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt && useradd --system --uid 10001 sentinel
+COPY worker ./
+COPY gateway/migrations ./migrations
+USER sentinel
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s CMD python healthcheck.py
 CMD ["python", "worker.py"]

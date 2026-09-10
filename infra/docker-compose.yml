@@ -1,117 +1,104 @@
+name: cloud-sentinel
+x-database-env: &database-env
+  PGHOST: db
+  PGPORT: 5432
+  PGDATABASE: cloud_sentinel
+  PGUSER: postgres
+  PGPASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}
+x-scan-env: &scan-env
+  AWS_REGION: ${AWS_REGION:-us-east-1}
+  FLOCI_ENDPOINT: ${FLOCI_ENDPOINT:-}
+  MAX_TASK_RETRIES: ${MAX_TASK_RETRIES:-3}
+  TASK_RETRY_DELAY_SECONDS: ${TASK_RETRY_DELAY_SECONDS:-5}
+  SCHEDULER_POLL_SECONDS: ${SCHEDULER_POLL_SECONDS:-30}
+  JOB_LEASE_SECONDS: ${JOB_LEASE_SECONDS:-120}
 services:
   dashboard:
-    build:
-      context: ../dashboard
-      dockerfile: Dockerfile
-    image: cloud-sentinel-dashboard:latest
+    build: {context: .., dockerfile: dashboard/Dockerfile}
+    restart: unless-stopped
+    init: true
     environment:
-      - NODE_ENV=production
-      - NEXT_PUBLIC_BACKEND_URL=http://localhost:3000
-      # Optional: enables the "Connect AWS Account" flow (see infra/cloudformation/).
-      # Leave both blank to keep scanning via this server's own static AWS credentials only.
-      - NEXT_PUBLIC_CFN_TEMPLATE_URL=${NEXT_PUBLIC_CFN_TEMPLATE_URL:-}
-      - NEXT_PUBLIC_TRUSTED_PRINCIPAL_ARN=${NEXT_PUBLIC_TRUSTED_PRINCIPAL_ARN:-}
-    ports:
-      - "3001:3000"
+      BACKEND_URL: http://gateway:3000
+    ports: ["127.0.0.1:3001:3000"]
     depends_on:
-      - gateway
-    networks:
-      - sentinel_net
-
-
+      gateway: {condition: service_healthy}
+    networks: [sentinel]
   gateway:
-    build:
-      context: ../gateway
-      dockerfile: Dockerfile
-    image: cloud-sentinel-gateway:latest
+    build: {context: .., dockerfile: gateway/Dockerfile}
+    restart: unless-stopped
+    init: true
     environment:
-      - NODE_ENV=production
-      - DATABASE_URL=postgres://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/cloud_sentinel
-      - REDIS_URL=redis://redis:6379
-      - JWT_SECRET=${JWT_SECRET:?JWT_SECRET must be set in infra/.env - see .env.example}
-      - ALLOWED_ORIGIN=${ALLOWED_ORIGIN:-}
-      - SINGLE_USER_MODE=${SINGLE_USER_MODE:-true}
-    ports:
-      - "3000:3000"
+      <<: [*database-env, *scan-env]
+      NODE_ENV: production
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in infra/.env}
+      ALLOWED_ORIGIN: ${ALLOWED_ORIGIN:-}
+      TRUST_PROXY: "true"
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      CFN_TEMPLATE_URL: ${CFN_TEMPLATE_URL:-${NEXT_PUBLIC_CFN_TEMPLATE_URL:-}}
+      TRUSTED_PRINCIPAL_ARN: ${TRUSTED_PRINCIPAL_ARN:-${NEXT_PUBLIC_TRUSTED_PRINCIPAL_ARN:-}}
+    ports: ["127.0.0.1:3000:3000"]
     depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
-    networks:
-      - sentinel_net
-
-
+      db: {condition: service_healthy}
+      redis: {condition: service_healthy}
+    networks: [sentinel]
   worker:
-    build:
-      context: ../worker
-      dockerfile: Dockerfile
-    image: cloud-sentinel-worker:latest
+    build: {context: .., dockerfile: worker/Dockerfile}
+    restart: unless-stopped
+    init: true
     env_file:
-      - ../.aws.env
+      - path: ../.aws.env
+        required: false
     environment:
-      - REDIS_URL=redis://redis:6379
-      - DATABASE_URL=postgres://postgres:${POSTGRES_PASSWORD:-postgres}@db:5432/cloud_sentinel
-      # Set in infra/.env - do not hardcode a real host/IP here, this file gets committed.
-      - FLOCI_ENDPOINT=${FLOCI_ENDPOINT:-}
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
+      <<: [*database-env, *scan-env]
+      REDIS_URL: redis://redis:6379
+    extra_hosts: ["host.docker.internal:host-gateway"]
     depends_on:
-      db:
-        condition: service_healthy
-      redis:
-        condition: service_started
-
-    networks:
-      - sentinel_net
-
-
+      db: {condition: service_healthy}
+    networks: [sentinel]
   redis:
     image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
     restart: unless-stopped
-    volumes:
-      - redis_data:/data
-    networks:
-      - sentinel_net
-
-
+    volumes: ["redis_data:/data"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [sentinel]
   db:
     image: postgres:15-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
       POSTGRES_DB: cloud_sentinel
-    volumes:
-      - pgdata:/var/lib/postgresql/data
+    volumes: ["pgdata:/var/lib/postgresql/data"]
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d cloud_sentinel"]
       interval: 5s
       timeout: 5s
       retries: 20
-      start_period: 10s
-    networks:
-      - sentinel_net
-
-
+    networks: [sentinel]
   nginx:
     image: nginx:stable-alpine
     restart: unless-stopped
+    ports: ["${BIND_ADDRESS:-127.0.0.1}:${HTTP_PORT:-8080}:80"]
+    volumes: ["../nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro"]
     depends_on:
-      - gateway
-    ports:
-      - "80:80"
-    volumes:
-      - ../nginx/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    networks:
-      - sentinel_net
-
-
+      gateway: {condition: service_healthy}
+      dashboard: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ready || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    networks: [sentinel]
 volumes:
   pgdata:
   redis_data:
-
-
 networks:
-  sentinel_net:
+  sentinel:
     driver: bridge

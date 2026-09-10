@@ -1,113 +1,23 @@
-#!/bin/bash
-
-echo "🚀 Starting Cloud Sentinel (LOCAL DEV MODE)"
-
-# ✅ Kill ports safely
-lsof -ti:3000 | xargs -r kill -9
-lsof -ti:3001 | xargs -r kill -9
-
-# ✅ Cleanup old containers
-sudo docker rm -f sentinel-postgres sentinel-redis >/dev/null 2>&1
-
-# =========================
-# ✅ Start Postgres
-# =========================
-echo "🐘 Starting Postgres..."
-sudo docker run -d \
-  --name sentinel-postgres \
-  -p 5432:5432 \
-  -e POSTGRES_USER=postgres \
-  -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=cloud_sentinel \
-  postgres:15-alpine
-
-# =========================
-# ✅ Wait for Postgres
-# =========================
-echo "⏳ Waiting for Postgres..."
-for i in {1..25}; do
-  sudo docker exec sentinel-postgres pg_isready -U postgres > /dev/null 2>&1 && \
-    echo "✅ Postgres ready" && break
-  echo "Waiting for Postgres ($i/25)..."
-  sleep 1
-done
-sleep 3
-
-# =========================
-# ✅ Start Redis
-# =========================
-echo "📦 Starting Redis..."
-sudo docker run -d \
-  --name sentinel-redis \
-  -p 6379:6379 \
-  redis:7-alpine
-
-# =========================
-# ✅ Wait for Redis
-# =========================
-echo "⏳ Waiting for Redis..."
-for i in {1..20}; do
-  nc -z localhost 6379 >/dev/null 2>&1 && echo "✅ Redis ready" && break
-  echo "Waiting for Redis ($i/20)..."
-  sleep 1
-done
-
-# =========================
-# ✅ AWS creds
-# =========================
-echo "🔐 Loading AWS credentials..."
-eval $(aws configure export-credentials --format env)
-
-# =========================
-# ✅ Start Gateway
-# =========================
-echo "🌐 Starting Gateway..."
-cd gateway
-npm install
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/cloud_sentinel \
-REDIS_URL=redis://localhost:6379 \
-npx ts-node src/server.ts &
-cd ..
-sleep 3
-
-# =========================
-# ✅ Start Worker
-# =========================
-echo "⚙️ Starting Worker..."
-cd worker
-
-if [ ! -d ".venv" ]; then
-  python -m venv .venv
+#!/usr/bin/env bash
+set -euo pipefail
+cd -- "$(dirname -- "${BASH_SOURCE[0]}")"
+if [[ ! -f infra/.env || ! -d gateway/node_modules || ! -d dashboard/node_modules || ! -x .venv/bin/python ]]; then
+  echo 'See docs/DEPLOYMENT.md: configure infra/.env and install service dependencies first.' >&2
+  exit 1
 fi
-
-source .venv/bin/activate
-pip install -r requirements.txt
-
-DATABASE_URL=postgres://postgres:postgres@localhost:5432/cloud_sentinel \
-REDIS_URL=redis://localhost:6379 \
-python worker.py &
-
-cd ..
-sleep 2
-
-# =========================
-# ✅ Start Dashboard
-# =========================
-echo "🖥️ Starting Dashboard..."
-cd dashboard
-
-if [ ! -f .env.local ]; then
-  echo "NEXT_PUBLIC_BACKEND_URL=http://localhost:3000" > .env.local
-fi
-
-npm install
-npm run dev -- -p 3001 &
-cd ..
-
-echo ""
-echo "✅ ALL SERVICES STARTED"
-echo "🌐 Dashboard: http://localhost:3001"
-echo "🔗 Backend:   http://localhost:3000"
-echo ""
-
-wait
+set -a
+source infra/.env
+if [[ -f .aws.env ]]; then source .aws.env; fi
+set +a
+export NODE_ENV=development PGHOST=127.0.0.1 PGPORT=5432 PGDATABASE=cloud_sentinel PGUSER=postgres
+export PGPASSWORD="$POSTGRES_PASSWORD" REDIS_URL=redis://127.0.0.1:6379 BACKEND_URL=http://127.0.0.1:3000
+unset DATABASE_URL
+# Start dependencies separately; this script never removes containers or kills port owners.
+children=()
+cleanup() { for pid in "${children[@]}"; do kill "$pid" 2>/dev/null || true; done; }
+trap cleanup EXIT INT TERM
+npm run start:ts --prefix gateway & children+=("$!")
+.venv/bin/python worker/worker.py & children+=("$!")
+npm run dev --prefix dashboard -- -p 3001 & children+=("$!")
+echo 'Dashboard: http://localhost:3001 · Gateway: http://localhost:3000'
+wait -n
