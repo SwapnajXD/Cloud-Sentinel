@@ -1,283 +1,137 @@
-# 🚀 Cloud-Sentinel
+# Cloud-Sentinel
 
-> A distributed AWS security auditing platform that scans cloud infrastructure for common security misconfigurations using an asynchronous worker architecture.
+A self-hosted, single-owner AWS security auditing console. A Node.js gateway
+records scan jobs in PostgreSQL, a Python worker inspects AWS configuration,
+and a Next.js dashboard presents scoped findings and reports.
 
-Cloud-Sentinel demonstrates production-style backend engineering concepts including queue-based processing, microservice architecture, AWS API integration, and containerized deployment.
+## Features
 
----
+- Select an AWS connection, region, and services for manual or scheduled scans.
+- Inspect S3 public access and encryption, EC2 security-group ingress, IAM MFA
+  and unused access keys, RDS exposure and encryption, and Lambda access and runtimes.
+- Keep explicit `PASS`, `FAIL`, `UNKNOWN`, and `SKIPPED` evidence. Incomplete
+  scans produce partial reports with provisional scores.
+- Track durable jobs with progress, renewable leases, retries with backoff,
+  and failed-job inspection and dismissal.
+- Compare reports for matching accounts and scope; inspect findings, export
+  JSON, print reports, and optionally request Gemini interpretation.
+- Connect additional AWS accounts through AssumeRole and an External ID.
+- Use database-enforced single-owner registration and one-hour JWT sessions.
 
-## ✨ Features
+Scores cover observed checks only: start at 100 and deduct 15 per critical,
+5 per medium, and 1 per low failed check, floored at zero. Higher is better.
+Correlated findings do not add duplicate penalties. Selected checks map to
+CIS AWS Foundations Benchmark v1.4.0; this is not a complete benchmark assessment.
 
-### 📋 Compliance & Risk Scoring
-
-* Maps applicable findings to real **CIS AWS Foundations Benchmark v1.4.0**
-  control IDs (root/IAM MFA, stale access keys, public S3 buckets, SSH/RDP
-  exposure) - RDS and Lambda findings are deliberately left unmapped since
-  they aren't part of the actual CIS Foundations Benchmark
-* Per-scan compliance summary (e.g. "3/5 CIS controls passing")
-* A transparent, additive 0-100 risk score + letter grade per scan (no
-  black-box weighting - the formula is a fixed penalty per finding severity,
-  easy to reproduce by hand)
-
-### 🔒 AWS Security Audits
-
-* Detect public S3 buckets
-* Verify S3 bucket encryption
-* Detect security groups open to `0.0.0.0/0`
-* Check IAM user MFA (both the scanning identity and account-wide, every IAM user)
-* Verify root account MFA
-* Flag unused or stale IAM access keys (account-wide, every IAM user)
-* List running EC2 instances
-* Detect publicly accessible RDS instances
-* Verify RDS storage encryption
-* Detect publicly invokable Lambda functions (public Function URLs or resource policies)
-* Flag Lambda functions on deprecated runtimes
-
-### ⚙️ Backend Architecture
-
-* Distributed worker architecture
-* Redis-based asynchronous job queue with retry + dead-letter handling
-* Dead-letter queue inspection and dismissal from the dashboard
-* Recurring/scheduled scans (hourly-granularity intervals, 1h-1 week)
-* Per-task status tracking (queued → running → done/error)
-* Cross-account scanning: other users can connect their own AWS account via
-  a read-only IAM role (AssumeRole + External ID, no long-lived credentials
-  ever stored) - see `infra/cloudformation/`. Fully opt-in; a deployment
-  with none of this configured keeps scanning via its own static credentials
-  exactly as before.
-* JWT authentication
-* PostgreSQL persistence
-* Dockerized deployment
-
----
-
-## 🏗️ System Architecture
+## Architecture
 
 ```text
-                Client
-                   │
-                   ▼
-                NGINX
-                   │
-                   ▼
-        Gateway (Node.js/Express)
-                   │
-                   ▼
-             Redis Queue
-                   │
-                   ▼
-          Worker (Python/boto3)
-                   │
-          ┌────────┴────────┐
-          ▼                 ▼
-      AWS APIs         PostgreSQL
-          │                 ▲
-          └────────┬────────┘
-                   ▼
-           Next.js Dashboard
+Browser → NGINX → Next.js dashboard
+              └→ Express gateway → PostgreSQL (jobs, reports, configuration)
+                                └→ Redis (optional worker wakeups)
+                    Python worker ↔ PostgreSQL
+                                  → AWS APIs / Floci emulator
 ```
 
----
+PostgreSQL is the durable queue. Redis notifications reduce dispatch latency;
+the worker can recover queued work by polling PostgreSQL when Redis is unavailable.
+See [Architecture](docs/ARCHITECTURE.md) for leases, retries, and scheduling.
 
-## 🛠️ Tech Stack
+## Quick start
 
-| Layer          | Technology           |
-| -------------- | -------------------- |
-| Frontend       | Next.js + TypeScript |
-| Backend        | Node.js + Express    |
-| Worker         | Python + boto3       |
-| Queue          | Redis                |
-| Database       | PostgreSQL           |
-| Infrastructure | Docker + NGINX       |
-
----
-
-## 🚀 Quick Start
-
-Clone the repository:
+Install Docker with Compose v2. Use an AWS CLI profile or a workload IAM role
+for real AWS scans. Run these commands from the repository root:
 
 ```bash
-git clone https://github.com/YOUR_USERNAME/cloud-sentinel.git
-cd cloud-sentinel
-```
-
-Authenticate with AWS:
-
-```bash
-aws login
-```
-
-Set up your environment file (required - the gateway won't start without a
-`JWT_SECRET`):
-
-```bash
+git clone https://github.com/SwapnajXD/Cloud-Sentinel.git
+cd Cloud-Sentinel
 cp infra/.env.example infra/.env
-# then edit infra/.env and fill in JWT_SECRET, ALLOWED_ORIGIN, etc.
+openssl rand -hex 32
+openssl rand -hex 32
 ```
 
-Start the application:
+Set `JWT_SECRET` and `POSTGRES_PASSWORD` in `infra/.env` to the two separately
+generated values. The JWT secret must have at least 32 characters.
+
+To export your authenticated AWS CLI profile's credentials and launch:
 
 ```bash
-./start.sh
+./start.sh --refresh-aws
 ```
 
-Run the tests:
+This writes credentials to the ignored `.aws.env` file with private file
+permissions. Refresh again when temporary credentials expire. To use an
+existing `.aws.env` or a workload IAM role, launch with `./start.sh`.
+
+Open **http://localhost:8080** and create the owner account. Registration
+closes after that account exists. Passwords require at least 12 characters
+and at most 72 UTF-8 bytes. `SINGLE_USER_MODE=false` is no longer supported.
+
+For a forgotten password on a running Compose installation:
+
+```bash
+python3 scripts/reset_owner_password.py owner@example.com
+```
+
+The command privately prompts for a new password. See
+[Owner password recovery](docs/DEPLOYMENT.md#owner-password-recovery) for
+requirements, sudo usage, and session behavior.
+
+## Development and tests
+
+See [Deployment](docs/DEPLOYMENT.md#local-development) for dependency setup
+and `./dev.sh`. After installing dependencies:
 
 ```bash
 npm test --prefix gateway
-.venv/bin/python -m unittest discover -s tests -p "test_worker.py"
+.venv/bin/python -m unittest discover -s tests -p test_worker.py
+python3 -m unittest discover -s tests -p test_password_reset.py
 ```
 
-See [Testing](docs/TESTING.md) for dependency setup, production build checks,
-and isolated PostgreSQL integration tests.
+[Testing](docs/TESTING.md) covers type checks, production builds, and isolated
+PostgreSQL integration tests.
 
----
-
-## 🔌 API
-
-| Method | Endpoint             | Description                  |
-| ------ | --------------------- | ---------------------------- |
-| POST   | `/api/register`       | Register a new user          |
-| POST   | `/api/login`          | Authenticate and receive JWT |
-| POST   | `/api/audit`          | Queue an AWS audit           |
-| GET    | `/api/audit/:task_id` | Check audit task status      |
-| GET    | `/api/reports`        | Retrieve audit reports       |
-| POST   | `/api/schedules`      | Create a recurring scan      |
-| GET    | `/api/schedules`      | List recurring scans         |
-| DELETE | `/api/schedules/:id`  | Cancel a recurring scan      |
-| GET    | `/api/dead-letter`    | List scans that failed all retries |
-| DELETE | `/api/dead-letter/:task_id` | Dismiss a dead-lettered scan |
-| POST   | `/api/aws-connections` | Connect an AWS account (role ARN + External ID) |
-| GET    | `/api/aws-connections` | List connected AWS accounts  |
-| DELETE | `/api/aws-connections/:id` | Disconnect an AWS account |
-| DELETE | `/api/account`        | Delete account (password-confirmed) |
-| GET    | `/health`             | Health check                 |
-
----
-
-## 📁 Project Structure
+## Project structure
 
 ```text
 Cloud-Sentinel/
-├── dashboard/          # Next.js frontend
-├── gateway/            # Node.js API Gateway
-├── worker/             # Python audit worker
-│   ├── scans/
-│   └── services/
-├── nginx/
-├── infra/
+├── dashboard/           # Next.js console and development API proxy
+├── gateway/             # Express API and shared SQL migrations
+├── worker/              # Python worker, scan modules, report services
+├── scripts/             # Private owner password recovery
+├── tests/               # Gateway, worker, recovery, and database tests
+├── nginx/               # Reverse proxy configuration
+├── infra/               # Compose files, environment example, IAM templates
 ├── docs/
-└── docker-compose.yml
+├── start.sh             # Container launch and explicit credential refresh
+└── dev.sh               # Local gateway, worker, and dashboard processes
 ```
 
----
+## Documentation
 
-## 📚 Documentation
+- [Console and developer guide](docs/GUIDE.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [API reference](docs/API.md)
+- [AWS checks and connections](docs/AWS.md)
+- [Database and migrations](docs/DATABASE.md)
+- [Deployment and password recovery](docs/DEPLOYMENT.md)
+- [Testing](docs/TESTING.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
 
-Detailed documentation is available in the `docs/` directory.
+## Deployment scope and limitations
 
-* 📘 `docs/GUIDE.md`
-* 🏗️ `docs/ARCHITECTURE.md`
-* 🔌 `docs/API.md`
-* ☁️ `docs/AWS.md`
-* 🗄️ `docs/DATABASE.md`
-* 🚀 `docs/DEPLOYMENT.md`
-* 🛠️ `docs/TROUBLESHOOTING.md`
+This is a personal tool with one owner; that owner can connect multiple AWS
+accounts. The database enforces this access model. The default deployment
+binds to loopback and serves HTTP. Configure TLS and appropriate access
+controls before exposing it beyond your machine.
 
----
+AWS scans inspect selected configuration, not end-to-end network reachability.
+IAM is account-wide; S3 inventories buckets across their actual regions;
+EC2, RDS, and Lambda use the selected region. Unknown or skipped evidence
+does not establish a pass, and a high score does not establish full coverage.
+Lambda runtime checks depend on the worker's maintained runtime table.
 
-## 🔐 Security & Deployment Posture
-
-### Default: single-user, personal use — and safe as such
-
-**This app defaults to single-user mode (`SINGLE_USER_MODE=true`).** Registration
-closes itself automatically after the first account is created, so cloning
-this repo and running it gives you a personal security-scanning tool on
-your own infrastructure - not an accidentally-exposed multi-tenant service.
-In this mode:
-
-* AWS credentials for your own account are **never committed** to the
-  repository and are exported dynamically at runtime using the AWS CLI.
-* Protected endpoints use **JWT authentication** with no insecure fallback -
-  the gateway refuses to start without a real `JWT_SECRET`.
-* You can still connect **additional AWS accounts you personally own**
-  (e.g. a homelab account plus a work account) via the cross-account
-  AssumeRole flow below - that's just you, using temporary credentials
-  instead of static ones, and is safe under this default.
-
-### Cross-account connections (AssumeRole) - the mechanism is sound, exposing it to strangers is not (yet)
-
-The AssumeRole implementation itself follows the AWS-recommended pattern
-correctly:
-
-* **Temporary, auto-expiring credentials only** (`sts:AssumeRole`, 1-hour
-  sessions) - Cloud-Sentinel never sees or stores anyone's long-lived
-  access keys for a connected account.
-* **External ID required** on every assume-role call, mitigating the
-  "confused deputy" problem.
-* **Least-privilege, read-only policy** on the connected role - see
-  `infra/cloudformation/cloud-sentinel-scan-role.yaml` for the exact
-  action list, generated by enumerating every AWS API call the scan
-  modules actually make. No write access, ever.
-* **Least-privilege on this side too** - the worker's own IAM identity
-  (in your AWS account) should be scoped to *only* `sts:AssumeRole` on
-  roles matching the Cloud-Sentinel naming convention, never given broad
-  permissions of its own. See `infra/cloudformation/worker-identity-policy.json`.
-  This matters because if the worker box itself were ever compromised, an
-  attacker should gain nothing beyond "can assume already-read-only
-  connected roles" - not your own account's permissions too.
-
-**What's still missing before this should ever be exposed to people you
-don't personally trust** (i.e. before setting `SINGLE_USER_MODE=false`):
-
-* **No TLS.** nginx has no HTTPS termination configured. JWTs and role
-  ARNs would travel in plaintext over an open connection - this alone
-  blocks any public deployment.
-* **No email verification on registration** - fine when you're the only
-  possible user; not fine once strangers can create accounts.
-* **App-level tenant isolation only.** All users share one Postgres
-  database, isolated by `user_id` checks in application code. A single
-  authorization bug would expose every connected user's role ARN and
-  External ID to every other user, not just their own. Real multi-tenant
-  isolation would need defense in depth beyond query-level `WHERE user_id = $1`.
-* **No abuse limits specific to connection creation**, and no visible
-  access log showing a connected user exactly when their account was
-  scanned and what was read.
-
-If you want to take this further into genuine multi-tenant territory, that
-list is the actual work, in roughly that priority order - not new scan
-checks or UI polish.
-
----
-
-## ⚠️ Known Limitations
-
-* Task retries use a fixed delay (no exponential backoff).
-* No account lockout after repeated failed logins beyond the 10-req/15-min
-  rate limit on `/api/login`.
-* The S3 public-access check only looks at bucket ACLs, not bucket
-  policies - a bucket made public purely via policy (no public ACL grant)
-  won't currently be flagged.
-* Manually scanning a specific connected account (when more than one is
-  connected) isn't in the UI yet - scans currently default to the first
-  connected account.
-
----
-
-## 🚧 Roadmap
-
-Planned enhancements include:
-
-* Email notifications
-* Dashboard analytics
-* Kubernetes deployment
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License.
-
----
-
-⭐ If you found this project interesting, consider starring the repository.
+Passwords are bcrypt-hashed; authentication attempts are rate-limited. Owner
+password recovery requires terminal and container access. There is no public
+password-reset endpoint or email recovery flow. Optional AI interpretation
+sends the selected report to Gemini only when requested from the console.

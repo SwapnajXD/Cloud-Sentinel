@@ -1,239 +1,91 @@
-# 🏗️ System Architecture
+# System architecture
 
-This document describes the architecture of Cloud-Sentinel, how its services communicate, and the design decisions behind the system.
-
----
-
-# High-Level Architecture
+Cloud-Sentinel separates HTTP requests from AWS scan execution. PostgreSQL
+stores both work and results; Redis supplies optional wakeups.
 
 ```text
-                     ┌────────────────────┐
-                     │       Client       │
-                     └──────────┬─────────┘
-                                │
-                                ▼
-                     ┌────────────────────┐
-                     │       NGINX        │
-                     └──────────┬─────────┘
-                                │
-               ┌────────────────┴────────────────┐
-               ▼                                 ▼
-    ┌────────────────────┐             ┌────────────────────┐
-    │     Dashboard      │             │      Gateway       │
-    │      (Next.js)     │             │   (Node.js/Express)│
-    └────────────────────┘             └──────────┬─────────┘
-                                                  │
-                                                  ▼
-                                         ┌────────────────┐
-                                         │     Redis      │
-                                         │  audit_tasks   │
-                                         └────────┬───────┘
-                                                  │
-                                                  ▼
-                                         ┌────────────────┐
-                                         │     Worker     │
-                                         │    (Python)    │
-                                         └────────┬───────┘
-                                                  │
-                          ┌───────────────────────┴───────────────────────┐
-                          ▼                                               ▼
-                 ┌────────────────┐                           ┌────────────────────┐
-                 │   AWS Services │                           │    PostgreSQL      │
-                 │ S3•EC2•IAM•RDS │                           │  Audit Reports DB  │
-                 └────────────────┘                           └────────────────────┘
+Browser → NGINX ─→ Next.js console
+               └→ Express gateway ─→ PostgreSQL
+                                  └→ Redis audit_tasks notifications
+Python worker ─→ PostgreSQL (claims, leases, reports, schedules, heartbeats)
+              ─→ Redis (wait for wakeup when no job is ready)
+              ─→ AWS APIs or configured Floci endpoint
 ```
 
----
+NGINX routes `/api/`, `/health`, and `/ready` to the gateway and other paths
+to the dashboard. During local development, the dashboard's `/api/*` route
+forwards requests to `BACKEND_URL` with the bearer token. The browser does
+not contact the database or AWS directly.
 
-# Components
+## Durable execution
 
-## Gateway
+`POST /api/audit` validates the selected connection, region, mode, and services
+and inserts an `audit_tasks` row before responding with HTTP 202. A Redis
+`audit_tasks` notification is best-effort; losing it does not lose the job.
 
-Responsibilities:
+Workers poll PostgreSQL and atomically claim due jobs using `FOR UPDATE SKIP
+LOCKED`. Each claim increments `attempts` and assigns a lease token and expiry.
+The default lease is 120 seconds (`JOB_LEASE_SECONDS`, minimum 30), renewed
+in the background every third of the lease interval and at service progress
+updates. Multiple workers can claim different jobs concurrently.
 
-* User authentication
-* JWT validation
-* Queue audit requests
-* Fetch audit reports
-* Communicate with PostgreSQL
+Completion locks and validates the unexpired lease, writes the report, and
+updates the task in one transaction. A unique report `task_id` prevents
+multiple persisted reports for a job. A worker that has lost its lease cannot
+publish over a newer claim. AWS reads may repeat after interrupted execution.
 
----
-
-## Dashboard
-
-Responsibilities:
-
-* User interface
-* Login
-* Trigger audits
-* View reports
-
----
-
-## Redis
-
-Responsibilities:
-
-* Store pending audit tasks
-* Decouple API requests from long-running scans
-* Enable asynchronous processing
-* Hold permanently-failed tasks for inspection (dead-letter queue)
-
-Queues used:
+The lifecycle is:
 
 ```text
-audit_tasks       - pending work, consumed via BRPOP
-audit_tasks_dead  - tasks that failed every retry attempt
+queued → running → done
+                 → partial (report contains unknown checks)
+                 → queued (retry after a task-level failure)
+                 → error (retry budget exhausted)
 ```
 
----
+Expired running leases are recovered on subsequent claim attempts. Failures
+retry up to `MAX_TASK_RETRIES` times after the first attempt (default 3).
+Delay is `TASK_RETRY_DELAY_SECONDS * 2 ** (attempts - 1)`, capped at 300 seconds;
+the default initial delay is 5 seconds.
 
-## Worker
+Failed jobs are database rows with `status = 'error'`. The dead-letter API
+lists undismissed failures; dismissal sets `dismissed = true` and retains
+history. There is no authoritative Redis dead-letter queue.
 
-Responsibilities:
+## Scheduling and health
 
-* Listen for audit tasks
-* Mark each task `running` in `audit_tasks`, then `done`/`error` when finished
-* Execute AWS scans
-* Build report
-* Save results to PostgreSQL
-* Retry failed tasks with a fixed delay (`MAX_TASK_RETRIES`,
-  `TASK_RETRY_DELAY_SECONDS`, default 3 retries / 5s delay); tasks that
-  exhaust their retries are pushed to `audit_tasks_dead` and marked `error`
+Each worker's maintenance loop checks due enabled schedules using row locks
+with `SKIP LOCKED`. Job creation and schedule advancement commit together.
+`SCHEDULER_POLL_SECONDS` defaults to 30; the maintenance loop checks elapsed
+time between heartbeat updates. A new schedule first runs after its interval.
+Disconnecting an AWS connection disables its schedules in the same transaction.
 
----
+Workers write database heartbeats and update a local heartbeat file. Gateway
+`/health` checks PostgreSQL, Redis, and whether any worker heartbeat is newer
+than 90 seconds; it returns 503 when degraded. Redis failure can degrade health
+while database-backed jobs continue. `/ready` checks access to the migrations
+table and is the gateway's container readiness probe.
 
-## PostgreSQL
+## Evidence and report generation
 
-Stores:
+The worker resolves the caller's AWS account with STS and records account,
+connection, region, mode, selected services, and schema version in report
+context. Selected scanners run through guards that preserve unavailable
+evidence as `UNKNOWN`. Reports include coverage, check counts, findings,
+CIS evidence, correlations, and comparisons against the latest matching context.
 
-* Users
-* Audit reports
-* Audit task status (`audit_tasks`: queued → running → done/error)
+Scores count failed resource checks only, excluding correlated annotations.
+Unknown checks make the score provisional; no assessed pass/fail checks means
+no score. See [AWS checks](AWS.md) for scope and evidence semantics.
 
----
+## Persistence and access
 
-## AWS
+Both gateway and worker run the same [versioned SQL migrations](DATABASE.md)
+under a transaction-scoped advisory lock. Users, connections, schedules,
+tasks, and reports live in PostgreSQL. The unique single-owner index prevents
+concurrent registrations from creating multiple owners. Protected API requests
+validate both the JWT and the continued existence of its account.
 
-Current supported services:
-
-* Amazon S3 (public access, encryption)
-* Amazon EC2 (running instances, open security groups)
-* AWS IAM (user MFA, root MFA, unused/stale access keys)
-* Amazon RDS (public accessibility, storage encryption)
-* AWS Lambda (public Function URLs, public resource policies, deprecated runtimes)
-
-Additional services can be added by creating new scan modules.
-
----
-
-## Compliance & Risk Scoring
-
-`worker/services/compliance.py` runs after all scan modules finish and does
-two things to every report:
-
-1. **CIS mapping** - annotates findings with the matching CIS AWS Foundations
-   Benchmark v1.4.0 control ID, where one genuinely exists. Only IAM
-   (root/user MFA, stale access keys), S3 public access, and SSH/RDP security
-   group exposure get mapped - RDS and Lambda findings are real and useful,
-   but those services aren't part of the actual CIS Foundations Benchmark,
-   so they're intentionally left unmapped rather than forced onto a
-   benchmark that doesn't cover them.
-2. **Risk score** - a transparent 0-100 score per scan: start at 100,
-   subtract a fixed penalty per finding by severity (critical -15,
-   medium -5, low -1), floor at 0, convert to a letter grade (A-F). No
-   black-box weighting - the exact formula is reproducible by hand from
-   the findings list alone.
-
----
-
-# Request Lifecycle
-
-```text
-User
- │
- ▼
-Dashboard
- │
- ▼
-Gateway
- │
- ▼
-Redis Queue
- │
- ▼
-Worker
- │
- ▼
-AWS APIs
- │
- ▼
-Audit Report
- │
- ▼
-PostgreSQL
- │
- ▼
-Dashboard
-```
-
----
-
-# Why Asynchronous Processing?
-
-AWS security scans may take several seconds depending on the number of resources.
-
-Instead of making users wait for the API response:
-
-1. The Gateway immediately queues the task.
-2. The Worker processes it independently.
-3. Users can retrieve the completed report later.
-
-This architecture improves:
-
-* Responsiveness
-* Reliability
-* Scalability
-
----
-
-# Scalability
-
-Cloud-Sentinel is designed to scale horizontally.
-
-Possible scaling strategy:
-
-```text
-                 Redis
-                   │
-     ┌─────────────┼─────────────┐
-     ▼             ▼             ▼
- Worker 1      Worker 2      Worker 3
-```
-
-Benefits:
-
-* Multiple audit jobs can run simultaneously.
-* Increased throughput.
-* Better resource utilization.
-
----
-
-# Design Principles
-
-* Separation of concerns
-* Modular scan implementation
-* Queue-based asynchronous processing
-* Stateless API services
-* Extensible architecture for future AWS services
-
----
-
-# Future Architecture
-
-Potential improvements include:
-
-* Email notifications
-* WebSocket-based live status updates (currently the dashboard polls `GET /api/audit/:task_id`)
-* Support for additional AWS services (ECS)
-* Cloud deployment using Kubernetes
+The deployment binds to loopback by default. Connected AWS roles use AssumeRole
+with an External ID; role credentials remain in worker memory. Optional Gemini
+requests originate from the gateway, where the provider key is configured.

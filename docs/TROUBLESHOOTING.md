@@ -1,266 +1,153 @@
-# 🛠️ Troubleshooting
+# Troubleshooting
 
-This guide covers common issues you may encounter while developing or running Cloud-Sentinel and provides recommended solutions.
+Run commands from the repository root with `infra/.env` configured. The base
+stack uses service names `gateway`, `worker`, `dashboard`, `db`, `redis`, and
+`nginx`; the default UI address is http://localhost:8080.
 
----
+## Start with status and logs
 
-# AWS Credentials
-
-## Error
-
-```text id="wv2w76"
-Unable to locate credentials
+```bash
+docker compose --env-file infra/.env -f infra/docker-compose.yml ps
+docker compose --env-file infra/.env -f infra/docker-compose.yml logs --tail=100 gateway worker
+curl http://localhost:8080/ready
+curl http://localhost:8080/health
 ```
 
-### Cause
+`/ready` checks the gateway's migration-table access. `/health` also checks
+Redis and a worker heartbeat within 90 seconds; 503 means degraded health.
+The response's `checks` object identifies the affected dependency.
 
-AWS credentials have not been configured or exported.
+## Forgotten owner password or registration closed
 
-### Solution
+Registration closes when an owner exists, enforced by PostgreSQL. Setting
+`SINGLE_USER_MODE=false` does not reopen it. To recover an existing account,
+run this from a private terminal with the Compose gateway running:
 
-Login to AWS:
-
-```bash id="cy4kud"
-aws login
+```bash
+python3 scripts/reset_owner_password.py owner@example.com
 ```
 
-Verify your identity:
+Use `--sudo` before the email if Docker requires it. The command asks for the
+new password twice. It requires at least 12 characters and at most 72 UTF-8
+bytes, and refuses prompts that would echo the password. If the owner-match
+check fails, verify the existing email; the installation must have exactly one
+matching owner. It does not create a missing account.
 
-```bash id="lzyt76"
+If the command cannot run, check Python 3, Docker access, `infra/.env`, and the
+`gateway` service. The recovery command uses the running container; `dev.sh`
+alone is insufficient. See [Owner password recovery](DEPLOYMENT.md#owner-password-recovery)
+for full requirements and immediate session invalidation. Resetting a password
+alone leaves existing JWTs valid until their one-hour expiry.
+
+## Missing or expired AWS credentials
+
+Verify the intended CLI profile:
+
+```bash
 aws sts get-caller-identity
 ```
 
-Restart the application:
+After authenticating the profile, refresh exported credentials and recreate
+the stack through the launch script:
 
-```bash id="8gt0g0"
-./start.sh
+```bash
+./start.sh --refresh-aws
 ```
 
----
+Plain `./start.sh` and `docker compose restart worker` do not refresh the
+credential file or recreate container environment values. Workload IAM roles
+can supply credentials without `.aws.env`.
 
-# Worker Not Processing Jobs
+For an AssumeRole failure, verify the selected role, trusted worker principal,
+matching External ID, and worker permission to assume that role. A saved
+connection is not proof that AWS access works. Disconnected connections cannot
+be used for new scans and do not fall back to another account.
 
-## Symptoms
+## Partial reports or unknown checks
 
-* Audit requests remain queued.
-* No audit reports are generated.
+Open the report and inspect unknown findings, service coverage, scope, and
+error codes. Partial results preserve observed findings when other evidence
+cannot be obtained; they are not evidence of a clean account. Verify scan-role
+permissions and service availability, then run a new scan.
 
-### Check Worker Logs
+The bundled role policy is missing some newer S3 and IAM read permissions;
+see [Scan-role permissions](AWS.md#scan-role-permissions). An empty inventory
+can yield skipped checks. A null score means no pass/fail checks were observed.
 
-```bash id="tfuy9o"
-docker compose logs -f worker
+## Queued jobs or interrupted scans
+
+Inspect worker logs and database tasks:
+
+```bash
+docker compose --env-file infra/.env -f infra/docker-compose.yml logs --tail=100 worker
+docker compose --env-file infra/.env -f infra/docker-compose.yml exec db psql -U postgres -d cloud_sentinel
 ```
 
-### Verify Redis
-
-```bash id="s2saf9"
-docker compose logs redis
+```sql
+SELECT task_id, status, attempts, progress, available_at, lease_until, error
+FROM audit_tasks ORDER BY created_at DESC LIMIT 20;
+SELECT worker_id, updated_at FROM worker_heartbeats;
 ```
 
-### Restart the Worker
+PostgreSQL is the durable queue. Jobs waiting to retry remain `queued` until
+`available_at`; a crashed worker's running job becomes recoverable after lease
+expiry. Check worker/database availability rather than manipulating Redis lists.
+Exhausted jobs appear in **Scans** and `/api/dead-letter`; dismissal retains
+history and does not rerun a job. Start a new scan after correcting its cause.
 
-```bash id="aajd1e"
-docker compose restart worker
+## Redis is unavailable
+
+```bash
+docker compose --env-file infra/.env -f infra/docker-compose.yml logs --tail=100 redis
+docker compose --env-file infra/.env -f infra/docker-compose.yml restart redis
 ```
 
----
+Redis supplies wakeups; queued jobs remain in PostgreSQL and workers poll for
+them. Redis failure degrades `/health`. Compose initially waits for healthy
+Redis before starting the gateway, even though ongoing worker processing can
+continue without Redis after startup.
 
-# Redis Connection Issues
+## Gateway or database startup failures
 
-## Symptoms
-
-* Gateway cannot enqueue audit jobs.
-* Worker cannot retrieve tasks.
-
-### Verify Redis Container
-
-```bash id="9m2frg"
-docker compose ps
+```bash
+docker compose --env-file infra/.env -f infra/docker-compose.yml logs --tail=100 gateway db
 ```
 
-### Restart Redis
+Check required `JWT_SECRET` and `POSTGRES_PASSWORD`, database connectivity,
+and occupied ports. JWT secrets must contain at least 32 characters and must
+not start with `change-me`.
 
-```bash id="wejlwm"
-docker compose restart redis
+Both backend processes apply shared migrations. Legacy multiple-owner or
+invalid foreign-key data can block migration; inspect and back up the database
+before correcting it. See [Database](DATABASE.md). Do not remove volumes to
+resolve a recoverable migration or password issue.
+
+Changing `POSTGRES_PASSWORD` in the environment does not update an existing
+database role's password. Keep the database role and application connection
+settings consistent when rotating it.
+
+## Dashboard and local development
+
+Use http://localhost:8080 for NGINX or http://localhost:3001 for local development.
+For a proxy error such as `Gateway unavailable`, inspect gateway availability
+and dashboard `BACKEND_URL`:
+
+```bash
+docker compose --env-file infra/.env -f infra/docker-compose.yml logs --tail=100 dashboard nginx
 ```
 
-### Check Redis Logs
+`dev.sh` requires both Node dependency directories, `.venv`, and `infra/.env`.
+Start `db` and `redis` with the development Compose override first. Stop
+containerized application services before starting local processes on ports
+3000/3001. See [Local development](DEPLOYMENT.md#local-development).
 
-```bash id="yfxkfw"
-docker compose logs redis
-```
+For 401 responses after a session has been active for an hour, sign in again.
+For CORS failures on direct cross-origin requests, check `ALLOWED_ORIGIN`.
+For rate-limit responses, wait for the indicated reset before retrying.
 
----
+## Optional AI errors
 
-# PostgreSQL Issues
-
-## View Database Logs
-
-```bash id="n8vfe9"
-docker compose logs postgres
-```
-
-### Connect to PostgreSQL
-
-```bash id="w67k7r"
-docker exec -it infra-db-1 psql -U postgres -d cloud_sentinel
-```
-
-### Verify Tables
-
-```sql id="2f91qb"
-\dt
-```
-
----
-
-# Gateway Not Starting
-
-## View Logs
-
-```bash id="6v17ho"
-docker compose logs gateway
-```
-
-### Common Causes
-
-* Missing environment variables
-* Port already in use
-* Database unavailable
-
-Check running services:
-
-```bash id="08m3xw"
-docker compose ps
-```
-
----
-
-# Dashboard Not Loading
-
-## Check Dashboard Logs
-
-```bash id="22e3aj"
-docker compose logs dashboard
-```
-
-### Verify NGINX
-
-```bash id="6a31g6"
-docker compose logs nginx
-```
-
-Ensure the Dashboard container is running:
-
-```bash id="c51yjc"
-docker compose ps
-```
-
----
-
-# Docker Issues
-
-## Rebuild Containers
-
-```bash id="y9m6qg"
-docker compose up --build
-```
-
-### Restart Everything
-
-```bash id="4ibkdz"
-docker compose down
-docker compose up -d
-```
-
-### Remove Containers and Volumes
-
-> **Warning:** This removes local database data.
-
-```bash id="u4x7fo"
-docker compose down -v
-```
-
----
-
-# Verify All Services
-
-List running containers:
-
-```bash id="bm4n8f"
-docker compose ps
-```
-
-Expected services:
-
-* gateway
-* worker
-* dashboard
-* postgres
-* redis
-* nginx
-
----
-
-# Health Check
-
-Verify the Gateway API is running:
-
-```bash id="j7v4ea"
-curl http://localhost/health
-```
-
-Expected response:
-
-```json id="2vuv1z"
-{
-  "status": "ok"
-}
-```
-
----
-
-# Useful Docker Commands
-
-View logs for all services:
-
-```bash id="mm1qzv"
-docker compose logs -f
-```
-
-Restart a specific service:
-
-```bash id="btr4zs"
-docker compose restart worker
-```
-
-Stop all services:
-
-```bash id="wgzwoz"
-docker compose down
-```
-
-List running containers:
-
-```bash id="6j2mhl"
-docker compose ps
-```
-
----
-
-# Still Having Issues?
-
-If the problem persists:
-
-1. Verify AWS credentials.
-2. Ensure Docker services are running.
-3. Check Redis connectivity.
-4. Confirm PostgreSQL is accessible.
-5. Review Gateway and Worker logs.
-6. Restart the application using:
-
-```bash id="slf3g7"
-./start.sh
-```
-
-If the issue remains unresolved, inspect the logs for the affected service and verify your environment configuration.
+Inspect the gateway's `GEMINI_API_KEY` and `GEMINI_MODEL` configuration. Missing
+configuration returns 503; provider failures and timeouts return 502. Recreate
+the gateway after changing Compose environment values. Scanner reports remain
+available independently of optional interpretation.

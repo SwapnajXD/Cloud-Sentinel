@@ -1,485 +1,231 @@
-# 🔌 API Reference
+# API reference
 
-This document describes the REST API exposed by the Cloud-Sentinel Gateway service.
+The default container API is **http://localhost:8080/api**. Local development
+uses **http://localhost:3001/api** through the dashboard proxy, or the gateway
+directly at **http://localhost:3000/api**. Health/readiness probes are served
+by NGINX and the gateway outside `/api`.
 
----
-
-# Base URL
-
-During local development:
-
-```text
-http://localhost/api
-```
-
-All API responses use JSON.
-
----
-
-# Authentication
-
-Protected endpoints require a JSON Web Token (JWT).
-
-Include the token in the request header:
+Requests and normal responses use JSON. Protected endpoints require:
 
 ```http
-Authorization: Bearer <your-jwt-token>
-```
-
-`/api/register` and `/api/login` are rate-limited to 10 requests per 15 minutes
-per IP. All other `/api` routes are limited to 60 requests per minute per IP.
-
----
-
-# Endpoints
-
-## Health Check
-
-Checks whether the Gateway service, Postgres, and Redis are reachable.
-
-### Request
-
-```http
-GET /health
-```
-
-### Response
-
-```json
-{
-  "status": "ok",
-  "uptime": 123.45,
-  "checks": { "postgres": "ok", "redis": "ok" }
-}
-```
-
-`status` is `"degraded"` (HTTP 503) if either dependency check fails.
-
----
-
-## Register User
-
-Creates a new user account.
-
-### Request
-
-```http
-POST /api/register
-Content-Type: application/json
-```
-
-Request body:
-
-```json
-{
-  "email": "john@example.com",
-  "password": "password123"
-}
-```
-
-Requirements: valid email format, password of at least 8 characters.
-
-### Success Response
-
-```json
-{
-  "id": 1,
-  "email": "john@example.com"
-}
-```
-
-### Error Responses
-
-| Status | Body                             | Reason                     |
-| ------ | -------------------------------- | --------------------------- |
-| 400    | `{"error": "email and password required"}` | Missing fields |
-| 400    | `{"error": "invalid email format"}` | Malformed email |
-| 400    | `{"error": "weak password"}`     | Password under 8 chars      |
-| 409    | `{"error": "email exists"}`      | Account already registered  |
-
----
-
-## Login
-
-Authenticates a user and returns a JWT (valid for 1 hour).
-
-### Request
-
-```http
-POST /api/login
-Content-Type: application/json
-```
-
-Request body:
-
-```json
-{
-  "email": "john@example.com",
-  "password": "password123"
-}
-```
-
-### Success Response
-
-```json
-{
-  "token": "<jwt-token>"
-}
-```
-
-Save this token and include it in future requests.
-
----
-
-## Start Audit
-
-Queues a new security audit. Runs against real AWS by default, or against a
-Floci (AWS-API-compatible local mock, e.g. LocalStack) endpoint if `mode` is
-`"floci"` and `FLOCI_ENDPOINT` is configured on the worker.
-
-### Request
-
-```http
-POST /api/audit
 Authorization: Bearer <jwt-token>
-Content-Type: application/json
 ```
 
-Request body:
+All `/api` requests are limited to 180 per minute per IP. Login and registration
+also share a 10-attempt limit per 15 minutes per IP. Request bodies are limited
+to 1 MB. Validation errors use `{ "error": "message" }`; rate limits return 429.
+
+## Public setup and authentication
+
+| Method / route | Request and response |
+| --- | --- |
+| `GET /api/setup` | `{ "registration_open": true, "single_user": true }`; registration closes when an owner exists |
+| `POST /api/register` | `{ "email": "owner@example.com", "password": "example-password-123" }` → 201 `{ "id": 1, "email": "owner@example.com" }` |
+| `POST /api/login` | Same fields → `{ "token": "<jwt-token>" }`; invalid credentials return 401 |
+
+Emails are trimmed and lowercased. New passwords require at least 12 characters
+and at most 72 UTF-8 bytes; login accepts existing passwords up to 72 bytes.
+The database permits only one owner. Further registration returns 403 with
+`registration closed: this installation already has an owner`.
+
+JWTs use HS256 and expire after one hour. Protected requests also verify that
+the owner still exists. There is no HTTP password-reset endpoint; use the
+[private recovery command](DEPLOYMENT.md#owner-password-recovery).
+
+## Scan configuration
+
+Manual audits and recurring schedules accept these shared fields:
 
 ```json
 {
   "mode": "aws",
-  "params": {}
+  "connection_id": null,
+  "region": "us-east-1",
+  "services": ["s3", "ec2", "iam", "rds", "lambda"]
 }
 ```
 
-`mode` defaults to `"aws"` if omitted; any value other than `"floci"` is
-treated as `"aws"`.
+| Field | Rules |
+| --- | --- |
+| `mode` | `aws` (default) or `floci`; other values return 400 |
+| `connection_id` | Positive ID of an active owned connection, or `null`/omitted for worker identity |
+| `region` | Defaults to gateway `AWS_REGION`, then `us-east-1`; must match the region-name format |
+| `services` | Nonempty subset of `s3`, `ec2`, `iam`, `rds`, `lambda`; defaults to all five; deduplicated and sorted |
 
-### Success Response
+Floci requires a configured `FLOCI_ENDPOINT` and cannot use a connection ID.
+The API does not automatically choose a connected account when the ID is
+omitted. An explicit connection must exist, be active, and belong to the owner.
+
+## Audits and task history
+
+`POST /api/audit` accepts scan configuration and persists a job. Returns 202:
 
 ```json
 {
   "status": "queued",
   "mode": "aws",
-  "task_id": "5f2e1c3a-....-....-....-............"
+  "task_id": "d0d820b2-793e-45f4-8937-87cd5a8ef274"
 }
 ```
 
-The audit runs asynchronously in the Worker service. Use `task_id` with the
-endpoint below to track progress.
-
----
-
-## Get Audit Task Status
-
-Checks the status of a previously queued audit.
-
-### Request
-
-```http
-GET /api/audit/:task_id
-Authorization: Bearer <jwt-token>
-```
-
-### Success Response
+`GET /api/tasks?limit=50` returns `{ "tasks": [...] }`, newest first.
+`GET /api/audit/:task_id` returns one task, or 404 when absent or not owned.
+Both expose:
 
 ```json
 {
-  "task_id": "5f2e1c3a-....",
-  "status": "done",
+  "task_id": "d0d820b2-793e-45f4-8937-87cd5a8ef274",
+  "status": "partial",
   "mode": "aws",
+  "connection_id": null,
   "report_id": 42,
   "error": null,
-  "created_at": "2026-07-11T10:00:00Z",
-  "updated_at": "2026-07-11T10:00:07Z"
+  "created_at": "2026-09-10T10:00:00Z",
+  "updated_at": "2026-09-10T10:00:07Z",
+  "attempts": 1,
+  "progress": "Assessment complete",
+  "payload": {
+    "task_id": "d0d820b2-793e-45f4-8937-87cd5a8ef274",
+    "action": "start_audit",
+    "user_id": 1,
+    "requested_at": "2026-09-10T10:00:00Z",
+    "mode": "aws",
+    "connection_id": null,
+    "region": "us-east-1",
+    "services": ["ec2", "iam", "lambda", "rds", "s3"],
+    "params": { "scope": "selected-services" }
+  }
 }
 ```
 
-`status` is one of `queued`, `running`, `done`, or `error`. If the worker
-retries a failed task, `status` may go back to `running` before finally
-settling on `done` or `error` (after retries are exhausted).
+Statuses are `queued`, `running`, `done`, `partial`, and `error`. Both `done`
+and `partial` are terminal states with reports. A task-level failure returns
+to `queued` while waiting to retry, then becomes `error` after the retry budget.
+`attempts` counts all claims, including the first attempt.
 
-Returns `404` if the task doesn't exist or doesn't belong to the
-authenticated user.
+Task/report list `limit` defaults to 50 and caps at 500; malformed or nonpositive
+values return 400.
 
----
+## Reports
 
-## Get Audit Reports
+- `GET /api/reports?limit=50` → `{ "reports": [...] }`, newest first.
+- `GET /api/reports/:id` → `{ "id": 42, "report": {...}, "created_at": "..." }`;
+  missing or unowned reports return 404.
 
-Returns completed audit reports for the authenticated user, most recent first.
+Each list item has the same shape as the detail response. New report payloads
+include schema version 2, task and timing metadata, account/scope `context`,
+`coverage`, `check_summary`, `partial`, `score_provisional`, `risk_score`,
+`risk_grade`, `cis_summary`, `diff`, and `findings`.
 
-### Request
+Findings have stable IDs, type, category, resource, region, status, severity,
+evidence, and remediation. Status is `PASS`, `FAIL`, `UNKNOWN`, or `SKIPPED`.
+Scores deduct critical/medium/low failure penalties of 15/5/1 from 100, floored
+at zero, excluding correlations. Scores and grades are `null` when there are
+no pass/fail checks. Unknown checks make scores provisional. CIS summaries
+include unknown control groups and describe partial benchmark coverage.
 
-```http
-GET /api/reports?limit=50
-Authorization: Bearer <jwt-token>
-```
+See [AWS](AWS.md) and [Database](DATABASE.md) for the report contract. Legacy
+reports can omit the new metadata.
 
-`limit` is optional, defaults to 50, capped at 500.
+## Recurring scans
 
-### Example Response
+| Method / route | Behavior |
+| --- | --- |
+| `POST /api/schedules` | Scan configuration plus integer `interval_hours` from 1 to 168; returns 201 with the created row |
+| `GET /api/schedules` | `{ "schedules": [...] }`, newest first; includes scope, enabled state, next run, and last task/status/error |
+| `PATCH /api/schedules/:id` | `{ "enabled": false }` pauses; `true` resumes; returns the updated row |
+| `DELETE /api/schedules/:id` | Deletes an owned schedule; returns `{ "status": "success" }` |
+
+The first run occurs after the chosen interval. Resuming resets `next_run_at`
+to now plus the interval; a disconnected connection prevents resuming.
+The worker checks due schedules using `SCHEDULER_POLL_SECONDS` (default 30).
+Missing/unowned schedule updates or deletions return 404.
+
+## AWS connections
+
+`POST /api/aws-connections` accepts:
 
 ```json
 {
-  "reports": [
-    {
-      "id": 42,
-      "created_at": "2026-07-11T10:00:07Z",
-      "report": {
-        "task_id": "5f2e1c3a-....",
-        "user_id": 1,
-        "summary": { "total": 3, "critical": 1, "medium": 1, "good": 1 },
-        "risk_score": 78,
-        "risk_grade": "B",
-        "cis_summary": {
-          "version": "CIS AWS Foundations Benchmark v1.4.0",
-          "controls_assessed": 2,
-          "controls_passing": 1,
-          "controls_failing": 1
-        },
-        "findings": [
-          {
-            "type": "S3PublicAccess",
-            "category": "S3",
-            "severity": "critical",
-            "resource": "example-bucket",
-            "title": "Public S3 bucket",
-            "description": "Bucket is publicly accessible.",
-            "remediation": "Remove public ACL or block public access.",
-            "cis": {
-              "control_id": "2.1.5",
-              "control_title": "Ensure that S3 Buckets are configured with 'Block Public Access'",
-              "version": "CIS AWS Foundations Benchmark v1.4.0"
-            }
-          }
-        ]
-      }
-    }
-  ]
+  "role_arn": "arn:aws:iam::123456789012:role/CloudSentinelScanRole",
+  "external_id": "a-unique-external-id-for-this-connection",
+  "label": "Personal AWS",
+  "region": "us-east-1"
 }
 ```
 
-`risk_score` is a transparent 0-100 score (start at 100, deduct a fixed
-penalty per finding by severity: critical -15, medium -5, low -1, floored
-at 0) with a letter grade (A-F). `cis` only appears on findings that
-correspond to a real CIS AWS Foundations Benchmark control - RDS and
-Lambda findings, for example, don't get one, since those services aren't
-part of that particular benchmark.
+Role ARN must be a valid IAM role ARN in the supported AWS partitions.
+External ID must be 16–1224 characters using letters, digits, underscores,
+or `+=,.@:/-`; label is optional and at most 80 characters. Region uses scan
+configuration defaults and validation. Registration stores the configuration;
+AWS access is exercised when a scan runs.
 
----
+Returns 201 with `id`, `role_arn`, `label`, `region`, `active`, and `created_at`.
+`GET /api/aws-connections` returns `{ "connections": [...] }`, including inactive
+connections. Neither response returns the stored External ID.
 
-## Create Recurring Scan
+`DELETE /api/aws-connections/:id` marks an active connection inactive and
+pauses its schedules transactionally. It preserves scan history and returns
+`{ "status": "success" }`; absent, unowned, or already inactive connections
+return 404. It does not delete the AWS role.
 
-Schedules a scan to run automatically on a fixed interval. The worker's
-background scheduler checks for due schedules every `SCHEDULER_POLL_SECONDS`
-(default 60s) and enqueues them exactly like a manually-triggered scan.
+## Failed jobs
 
-### Request
+`GET /api/dead-letter` returns up to 200 undismissed database failures, newest
+first, wrapped in `{ "tasks": [...] }`. Fields are `task_id`, `user_id`, `mode`,
+`final_error`, `_retries`, and `requested_at`. The compatibility field `_retries`
+contains total attempts, including the first attempt.
 
-```http
-POST /api/schedules
-Authorization: Bearer <jwt-token>
-Content-Type: application/json
-```
+`DELETE /api/dead-letter/:task_id` marks a failed job dismissed and returns
+`{ "status": "success" }`. It neither retries the scan nor deletes task history.
+Absent, unowned, or already dismissed failures return 404.
 
-```json
-{ "mode": "aws", "interval_hours": 24 }
-```
+## Owner deletion
 
-`interval_hours` must be an integer between 1 and 168 (one week).
+`DELETE /api/account` requires `{ "password": "current-password" }` and a JWT.
+It returns `{ "status": "success" }` after deleting the owner and cascading
+to connections, schedules, tasks, and reports. AWS resources are unaffected.
+Incorrect passwords return 401. Owner deletion invalidates future requests
+with the old token and reopens registration.
 
-### Success Response
+## Optional AI interpretation
+
+`POST /api/ai/summary` accepts `{ "report_id": 42 }` to summarize an owned
+report. It also accepts `{ "report": {...} }`; `report_id` takes precedence
+when both are supplied. Report contents are sent to Gemini by the gateway.
+
+Returns `{ "summary": "...", "generated_by": "<configured-model>" }`.
+Missing `GEMINI_API_KEY` returns 503; missing reports return 404; provider
+rejection, timeout, or unavailability returns 502. The gateway uses a
+20-second provider timeout and `GEMINI_MODEL` (default `gemini-2.5-flash`).
+
+## Health, readiness, and runtime settings
+
+`GET /health` is public and returns 200 when all checks pass, or 503 when degraded:
 
 ```json
 {
-  "id": 1,
-  "mode": "aws",
-  "interval_hours": 24,
-  "next_run_at": "2026-07-15T10:00:00Z",
-  "created_at": "2026-07-14T10:00:00Z"
+  "status": "ok",
+  "uptime": 123.45,
+  "checks": { "postgres": "ok", "redis": "ok", "worker": "ok" }
 }
 ```
 
----
+Worker health requires a database heartbeat within 90 seconds. Redis failure
+degrades health even though database-backed scan processing can continue.
 
-## List Recurring Scans
+`GET /ready` is public, verifies access to `schema_migrations`, and returns
+`{ "status": "ready" }` on success. Database errors use the normal 500 handler.
 
-```http
-GET /api/schedules
-Authorization: Bearer <jwt-token>
-```
+`GET /api/system` requires authentication and returns health plus `single_user`,
+`region`, `services`, `ai_configured`, `floci_configured`, `template_url`,
+`trusted_principal_arn`, `retry_limit`, `scheduler_poll_seconds`, and `version`.
+Secret values are omitted.
 
-Returns `{ "schedules": [...] }` for the authenticated user, most recent first.
+## Example workflow
 
----
-
-## Cancel Recurring Scan
-
-```http
-DELETE /api/schedules/:id
-Authorization: Bearer <jwt-token>
-```
-
-Returns `404` if the schedule doesn't exist or doesn't belong to the caller.
-
----
-
-## List Dead-Lettered Scans
-
-Scans that failed every retry attempt end up here instead of vanishing
-silently. Only returns entries belonging to the authenticated user.
-
-```http
-GET /api/dead-letter
-Authorization: Bearer <jwt-token>
-```
-
-```json
-{
-  "tasks": [
-    {
-      "task_id": "5f2e1c3a-....",
-      "user_id": 1,
-      "mode": "aws",
-      "requested_at": "2026-07-14T09:00:00Z",
-      "final_error": "FLOCI_ENDPOINT not set",
-      "_retries": 3
-    }
-  ]
-}
-```
-
----
-
-## Dismiss a Dead-Lettered Scan
-
-```http
-DELETE /api/dead-letter/:task_id
-Authorization: Bearer <jwt-token>
-```
-
-Removes the entry from the dead-letter queue. Returns `404` if it doesn't
-exist or belongs to someone else.
-
----
-
-## Delete Account
-
-Deletes the authenticated user's account and all of their audit reports
-(cascading delete). Requires re-entering the account password to confirm.
-
-### Request
-
-```http
-DELETE /api/account
-Authorization: Bearer <jwt-token>
-Content-Type: application/json
-```
-
-```json
-{ "password": "password123" }
-```
-
-### Success Response
-
-```json
-{ "status": "success" }
-```
-
----
-
-## AI Summary (optional)
-
-Generates a natural-language summary of a report using Gemini. Requires
-`GEMINI_API_KEY` to be configured on the gateway.
-
-### Request
-
-```http
-POST /api/ai/summary
-Authorization: Bearer <jwt-token>
-Content-Type: application/json
-```
-
-```json
-{ "report": { "...": "a report object from /api/reports" } }
-```
-
-### Success Response
-
-```json
-{ "summary": "..." }
-```
-
----
-
-# Authentication Flow
-
-```text
-Register
-    │
-    ▼
-Login
-    │
-    ▼
-Receive JWT
-    │
-    ▼
-Include JWT in Authorization header
-    │
-    ▼
-Access protected endpoints
-```
-
----
-
-# HTTP Status Codes
-
-| Code | Description                              |
-| ---- | ---------------------------------------- |
-| 200  | Request successful                       |
-| 201  | Resource created                         |
-| 202  | Audit queued                             |
-| 400  | Invalid request                          |
-| 401  | Authentication required or invalid token |
-| 403  | Access denied                            |
-| 404  | Resource not found                       |
-| 429  | Rate limit exceeded                      |
-| 500  | Internal server error                    |
-| 503  | Dependency (Postgres/Redis) unavailable  |
-
----
-
-# Error Response Format
-
-Errors are returned as JSON.
-
-Example:
-
-```json
-{
-  "error": "invalid credentials"
-}
-```
-
----
-
-# Example Workflow
-
-1. Register a new user via `/api/register`.
-2. Login via `/api/login` to receive a JWT.
-3. Start an audit using `POST /api/audit`, save the returned `task_id`.
-4. Poll `GET /api/audit/:task_id` until `status` is `done` or `error`.
-5. Retrieve the completed report using `GET /api/reports`.
-
----
-
-# Notes
-
-* All request and response bodies use JSON.
-* Audit execution is asynchronous; failed tasks are retried by the worker
-  (see `docs/ARCHITECTURE.md`) before being marked `error`.
-* JWT authentication is required for protected endpoints.
-* Reports are persisted in PostgreSQL after the Worker completes processing.
+1. Check `/api/setup`; register only if registration is open.
+2. Log in and save the token.
+3. Start an audit with explicit scan scope; save `task_id`.
+4. Poll the task until `done`, `partial`, or `error`.
+5. For `done` or `partial`, fetch `/api/reports/:report_id` and inspect coverage.

@@ -1,176 +1,74 @@
-# 📘 Developer Guide
-
-Cloud-Sentinel is a distributed AWS auditing platform that scans AWS infrastructure for common security issues using an asynchronous worker architecture.
-
-This guide explains how the system works, how its components interact, and how to run the project locally.
-
----
-
-# Overview
-
-Cloud-Sentinel consists of multiple services that work together:
-
-* **Gateway (Node.js/Express)** — Authentication, API endpoints, and task creation
-* **Redis** — Message queue for audit tasks
-* **Worker (Python)** — Executes AWS scans asynchronously
-* **PostgreSQL** — Stores audit reports
-* **Dashboard (Next.js)** — User interface for triggering audits and viewing reports
-* **NGINX** — Reverse proxy for routing frontend and API traffic
-
----
-
-# Execution Flow
-
-1. User logs into the dashboard.
-2. User starts an audit.
-3. The Gateway validates the JWT.
-4. A new audit task is pushed into the Redis queue (`audit_tasks`).
-5. The Worker consumes the task.
-6. The Worker:
-
-   * Connects to AWS using boto3
-   * Executes security scans
-   * Builds an audit report
-7. The report is stored in PostgreSQL.
-8. The Dashboard retrieves reports through the Gateway.
-
----
-
-# Project Components
-
-## Gateway
-
-Responsibilities:
-
-* User registration
-* User login
-* JWT authentication
-* Queue audit tasks
-* Fetch audit reports
-
----
-
-## Worker
-
-Responsibilities:
-
-* Listen to Redis queue
-* Execute AWS security scans
-* Build audit reports
-* Store reports in PostgreSQL
-
----
-
-## Dashboard
-
-Responsibilities:
-
-* User interface
-* Trigger audits
-* Display audit reports
-
----
-
-## Redis
-
-Responsibilities:
-
-* Queue audit jobs
-* Decouple API requests from long-running AWS scans
-
----
-
-## PostgreSQL
-
-Responsibilities:
-
-* Store users
-* Store audit reports
-* Persist scan results
-
----
-
-## NGINX
-
-Responsibilities:
-
-* Reverse proxy
-
-* Route requests
-
-* `/` → Dashboard
-
-* `/api` → Gateway
-
----
-
-# Running the Project
-
-Start all services:
-
-```bash
-./start.sh
-```
-
-This script:
-
-* Exports AWS credentials
-* Starts Docker Compose
-* Launches all services
-
----
-
-# Testing
-
-Run the end-to-end workflow:
-
-```bash
-./test-flow.sh
-```
-
-Run Gateway tests:
-
-```bash
-npm test
-```
-
-Run Worker tests:
-
-```bash
-python -m unittest discover
-```
-
----
-
-# Design Decisions
-
-## Why Redis?
-
-Redis provides a lightweight, fast message queue that keeps the API responsive while AWS scans run asynchronously.
-
-## Why a Worker?
-
-AWS scans can take several seconds.
-
-Moving them into a separate worker allows the Gateway to immediately return a response instead of blocking.
-
-## Why Separate Scan Modules?
-
-Each AWS service has its own scanning module.
-
-Benefits:
-
-* Easier maintenance
-* Easier testing
-* Easy to extend with new AWS services
-
----
-
-# Future Improvements
-
-* Add RDS scans
-* Add Lambda scans
-* Scheduled audits
-* Email notifications
-* Retry failed jobs
-* Dashboard analytics
+# Console and developer guide
+
+Cloud-Sentinel is a single-owner AWS configuration auditing platform. Follow
+[Deployment](DEPLOYMENT.md) to start it, then open http://localhost:8080
+(container stack) or http://localhost:3001 (local development).
+
+## First use
+
+1. Create the installation's owner account on the login page. Registration
+   closes once an owner exists, enforced by a database unique index.
+2. Sign in. Sessions last one hour.
+3. Use **Accounts** to connect an AWS role, or scan with the worker's own AWS
+   identity. Connection setup is described in [AWS](AWS.md).
+4. Start a scan from the console, selecting the connection, region, and services.
+5. Follow progress in **Scans**, then open the linked report.
+
+If you forget the password, use the private
+[owner recovery command](DEPLOYMENT.md#owner-password-recovery).
+
+## Console pages
+
+| Page | Purpose |
+| --- | --- |
+| Overview (`/`) | Latest scoped assessment, score, severity distribution, trends, and priority findings |
+| Accounts (`/accounts`) | Connect and disconnect AWS roles; inspect their scan history |
+| Scans (`/scans`) | Start scans, follow attempts and progress, filter status, and dismiss failed jobs |
+| Findings (`/findings`) | Filter findings and inspect evidence and remediation |
+| Reports (`/reports`) | Browse assessment snapshots |
+| Report detail (`/reports/:id`) | Inspect scope and coverage, export JSON, print, or request optional AI insights |
+| Schedules (`/schedules`) | Create recurring scans, pause/resume them, and inspect their last run |
+| Settings (`/settings`) | View owner access, runtime configuration, dependency health, and account deletion |
+
+Runtime configuration is set in the deployment environment. Deleting the
+owner requires the current password and removes connections, schedules,
+tasks, and reports through database cascades; it does not delete AWS resources.
+
+## Reading results
+
+Checks report `PASS`, `FAIL`, `UNKNOWN`, or `SKIPPED`. Missing permissions or
+unavailable AWS evidence produce `UNKNOWN`; empty service inventories can
+produce `SKIPPED`. A task with unknown checks finishes as `partial` and still
+has a report. Its score is provisional. If no checks pass or fail, the score
+and grade are absent (`null`).
+
+The observed score runs from 0 to 100, with higher values indicating fewer
+observed failures. CIS summaries cover selected checks and resources only.
+Comparisons require matching account, connection, region, mode, service set,
+and schema version. Missing evidence is tracked separately from resolution.
+Older reports without scope metadata are marked as legacy assessments.
+
+## Request lifecycle
+
+1. The gateway validates the session and requested scan configuration.
+2. It stores a queued `audit_tasks` row and attempts a Redis wakeup.
+3. A worker claims a due row with a renewable database lease.
+4. The worker resolves AWS identity and gathers selected service evidence.
+5. It saves the report and terminal task state in one transaction.
+6. The dashboard polls the API to refresh status and fetch reports.
+
+Interrupted jobs can be recovered after lease expiry. Task-level failures
+retry with exponential backoff before becoming `error`. See
+[Architecture](ARCHITECTURE.md) for the processing details.
+
+## Working on the project
+
+The gateway owns authentication and the REST API; the dashboard uses those
+endpoints through NGINX or its development proxy. The Python worker owns AWS
+calls and report generation. Both backend processes apply the shared SQL
+files in `gateway/migrations` at startup.
+
+Use [Testing](TESTING.md) for dependency installation and verification commands.
+Gateway and worker unit tests use mocked dependencies; a separate suite
+exercises real PostgreSQL behavior.
+For new scan checks, follow [Extending the scanner](AWS.md#extending-the-scanner).

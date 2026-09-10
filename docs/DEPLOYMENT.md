@@ -1,249 +1,187 @@
-# 🚀 Deployment Guide
+# Deployment guide
 
-This document explains how to deploy and run Cloud-Sentinel in a local development environment and outlines considerations for production deployments.
+Run commands from the repository root. Container deployment requires Docker
+with Compose v2 supporting optional `env_file` entries. Local development
+uses Node.js 22–26 and Python 3.11 or newer; container builds use Node 22.
+Use the AWS CLI when exporting local credentials.
 
----
-
-# Prerequisites
-
-Before starting the project, ensure the following are installed:
-
-* Docker
-* Docker Compose
-* Node.js (for local development)
-* Python 3.11+
-* AWS CLI v2
-
-Verify your installations:
+## Configure the environment
 
 ```bash
-docker --version
-docker compose version
-node --version
-python --version
-aws --version
+cp infra/.env.example infra/.env
+openssl rand -hex 32
+openssl rand -hex 32
 ```
 
----
+Set `JWT_SECRET` and `POSTGRES_PASSWORD` in `infra/.env` to separate generated
+values. Keep populated environment files private. Because `dev.sh` sources
+`infra/.env` in Bash, use shell-compatible assignments when developing locally.
 
-# AWS Authentication
+| Variable | Purpose / default |
+| --- | --- |
+| `JWT_SECRET` | Required; at least 32 characters, with no `change-me` prefix |
+| `POSTGRES_PASSWORD` | Required database password; Compose supplies it to PostgreSQL and both backend processes |
+| `AWS_REGION` | Default scan region, `us-east-1` |
+| `BIND_ADDRESS`, `HTTP_PORT` | NGINX host binding, `127.0.0.1:8080` |
+| `ALLOWED_ORIGIN` | Comma-separated browser origins; empty blocks cross-origin access in production and allows it in development |
+| `FLOCI_ENDPOINT` | Optional AWS-compatible emulator endpoint, configured on gateway and worker |
+| `MAX_TASK_RETRIES` | Retries after the first attempt, default `3` |
+| `TASK_RETRY_DELAY_SECONDS` | Initial retry delay, default `5`; exponential backoff caps at 300 seconds |
+| `JOB_LEASE_SECONDS` | Worker lease duration, default `120`, minimum `30` |
+| `SCHEDULER_POLL_SECONDS` | Schedule polling setting, default `30` |
+| `GEMINI_API_KEY`, `GEMINI_MODEL` | Optional gateway AI configuration; model defaults to `gemini-2.5-flash` |
+| `CFN_TEMPLATE_URL`, `TRUSTED_PRINCIPAL_ARN` | Optional runtime settings for guided AWS connection setup |
 
-Cloud-Sentinel uses your AWS CLI credentials.
+Compose supplies `PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, and `PGPASSWORD`
+for database access, plus `REDIS_URL`. Outside Compose, the backend processes
+also accept `DATABASE_URL`. The dashboard uses `BACKEND_URL` for its server-side
+API proxy. Compose sets `TRUST_PROXY=true` on the gateway behind NGINX.
 
-Login to AWS:
+The app is always single-owner. `SINGLE_USER_MODE=false` has no effect and
+cannot enable multiple users.
+
+## Start the container stack
+
+With an authenticated AWS CLI profile:
 
 ```bash
-aws login
+./start.sh --refresh-aws
 ```
 
-Export credentials:
-
-```bash
-aws configure export-credentials
-```
-
-The `start.sh` script automatically exports these credentials as environment variables before launching Docker containers.
-
-No AWS credentials are stored in the repository.
-
----
-
-# Environment Variables
-
-The project uses the following environment variables.
-
-| Variable                | Description                             |
-| ----------------------- | ---------------------------------------- |
-| DATABASE_URL            | PostgreSQL connection string            |
-| REDIS_URL               | Redis connection string                 |
-| SINGLE_USER_MODE        | Defaults to `true`. Registration closes automatically after the first account exists, keeping a cloned copy of this project a personal tool rather than an accidentally-exposed multi-tenant service. Read the README's "Security & Deployment Posture" section in full before setting this to `false`. |
-| JWT_SECRET              | **Required.** Secret used to sign JWT tokens. The gateway refuses to start if this is unset - there is no default. Generate with `openssl rand -base64 48`. |
-| ALLOWED_ORIGIN          | Comma-separated list of origins allowed to call the gateway from a browser. Leave blank and cross-origin requests are blocked in production (allowed in local dev). |
-| POSTGRES_PASSWORD       | Password for the `postgres` user used by both the `db` service and the gateway/worker connection string. Change beyond local dev. |
-| FLOCI_ENDPOINT          | Endpoint of a local AWS-API-compatible mock (e.g. LocalStack), used when `mode: "floci"` is passed to `/api/audit`. Leave blank if only auditing real AWS. |
-| MAX_TASK_RETRIES        | Number of times the worker retries a failed audit task before dead-lettering it. Default 3. |
-| TASK_RETRY_DELAY_SECONDS| Delay between retry attempts. Default 5. |
-| SCHEDULER_POLL_SECONDS  | How often the worker checks for due recurring scans (`scheduled_scans`). Default 60. |
-| AWS_ACCESS_KEY_ID       | AWS access key (runtime)                |
-| AWS_SECRET_ACCESS_KEY   | AWS secret key (runtime)                |
-| AWS_SESSION_TOKEN       | Temporary session token (if applicable) |
-| AWS_REGION              | AWS region                              |
-| GEMINI_API_KEY          | Optional. Enables `/api/ai/summary`.    |
-
-Most AWS variables are injected automatically by `start.sh`. All others are
-read from `infra/.env` - copy `infra/.env.example` to `infra/.env` and fill
-it in before running `docker compose up`.
-
----
-
-# Starting the System
-
-Launch every service with:
+Credential refresh is explicit. It exports to the ignored `.aws.env` file
+using private file permissions, then starts Compose with a build. Repeat
+when temporary credentials expire. If using an existing credential file or
+a workload IAM role, start with:
 
 ```bash
 ./start.sh
 ```
 
-This script:
+The worker loads `.aws.env` when present; it can otherwise use boto3's normal
+credential chain. Floci clients use dummy credentials. See [AWS](AWS.md).
 
-1. Retrieves AWS credentials
-2. Exports environment variables
-3. Starts Docker Compose
-4. Launches:
+Open **http://localhost:8080**. NGINX routes API traffic to the gateway and
+pages to the dashboard. Direct dashboard and gateway ports bind to loopback
+at 3001 and 3000 respectively. PostgreSQL and Redis have no published host
+ports in the base stack.
 
-* Gateway
-* Dashboard
-* Worker
-* Redis
-* PostgreSQL
-* NGINX
+Services are `dashboard`, `gateway`, `worker`, `redis`, `db`, and `nginx`.
+PostgreSQL and Redis use named volumes. The gateway and worker apply shared
+SQL migrations at startup; see [Database](DATABASE.md) before upgrading a
+legacy installation.
 
----
+## Local development
 
-# Docker Services
-
-The application consists of the following containers:
-
-| Service   | Purpose              |
-| --------- | -------------------- |
-| gateway   | REST API             |
-| worker    | AWS audit processing |
-| dashboard | Web interface        |
-| redis     | Task queue           |
-| postgres  | Database             |
-| nginx     | Reverse proxy        |
-
-Check running containers:
+Install service dependencies:
 
 ```bash
-docker compose ps
+npm ci --prefix gateway
+npm ci --prefix dashboard
+python3 -m venv .venv
+.venv/bin/python -m pip install -r worker/requirements.txt
 ```
 
-View logs:
+If the full container stack is running, stop its application services to
+free local ports and avoid running an extra worker:
 
 ```bash
-docker compose logs -f
+docker compose --env-file infra/.env -f infra/docker-compose.yml \
+  stop nginx dashboard gateway worker
 ```
 
----
-
-# Running Tests
-
-Gateway tests (from `gateway/`) - includes both unit tests for the JWT
-helpers and full integration tests against every exposed API route (via
-supertest, with Postgres/Redis mocked so no live infra is needed):
+Start database and Redis with loopback host ports, then launch local processes:
 
 ```bash
-npm test
+docker compose --env-file infra/.env -f infra/docker-compose.yml \
+  -f infra/compose.dev.yml up -d db redis
+./dev.sh
 ```
 
-Worker tests (from `worker/`, with `../tests` containing the test files):
+`dev.sh` reads `infra/.env` and an existing `.aws.env`, sets local connection
+variables, and starts the gateway, worker, and Next.js development server.
+It does not start database containers or refresh AWS credentials. To export
+an authenticated profile without starting the full stack:
 
 ```bash
-python -m unittest discover -s ../tests -p "test_worker.py"
+(umask 077; aws configure export-credentials --format env > .aws.env.tmp && mv .aws.env.tmp .aws.env)
 ```
 
----
+Open **http://localhost:3001**; the dashboard forwards `/api/*` to the gateway
+on port 3000. Ctrl+C stops the child processes; dependency containers remain.
+See [Testing](TESTING.md) for unit tests, type checks, builds, and database tests.
 
-# Scaling Workers
+## Owner password recovery
 
-Because audit processing is asynchronous, multiple Worker instances can run simultaneously.
-
-Example:
+On a running Compose installation, use a private interactive terminal:
 
 ```bash
-docker compose up --scale worker=3
+python3 scripts/reset_owner_password.py owner@example.com
 ```
 
-Redis distributes queued audit tasks among available workers.
-
-Benefits:
-
-* Faster processing
-* Higher throughput
-* Improved scalability
-
----
-
-# Production Considerations
-
-For a production deployment, consider:
-
-* Deploy PostgreSQL using Amazon RDS
-* Use Amazon ElastiCache for Redis
-* Store secrets in AWS Secrets Manager
-* Use IAM Roles instead of long-lived credentials
-* Enable HTTPS with TLS certificates
-* Configure automated backups
-* Centralize logs with CloudWatch or another logging solution
-* Add health checks and monitoring
-
----
-
-# Deployment Workflow
-
-```text
-Developer
-    │
-    ▼
-AWS Login
-    │
-    ▼
-Export Credentials
-    │
-    ▼
-Run start.sh
-    │
-    ▼
-Docker Compose
-    │
-    ▼
-All Services Started
-```
-
----
-
-# Stopping the Application
-
-Stop all running containers:
+If Docker requires sudo:
 
 ```bash
-docker compose down
+python3 scripts/reset_owner_password.py --sudo owner@example.com
 ```
 
-Stop and remove volumes:
+The command requires Python 3, Docker Compose, `infra/.env`, and the running
+`gateway` container with database access. It uses the gateway's Node.js
+and database dependencies; no local Python packages are required. Local
+`dev.sh` processes alone do not provide the container this command needs.
+
+Enter the new password twice when prompted: at least 12 characters and at
+most 72 UTF-8 bytes. Input must be private; the command refuses a terminal
+that would echo the password. The password travels over the container command's
+stdin, not a command-line argument. With `--sudo`, sudo authenticates first.
+
+The script lowercases and trims the supplied email, locks existing owner rows,
+and requires exactly one owner matching that email. It updates the bcrypt hash
+in a transaction without changing owner identity, reports, or other workspace
+data. Mismatched prompts or invalid passwords are rejected before a database
+update. This is a host administration command, not a public recovery endpoint.
+
+A password reset **does not revoke existing JWTs**. Existing sessions remain
+valid until their one-hour expiry. If immediate session invalidation is needed,
+rotate `JWT_SECRET` in `infra/.env` and recreate the gateway:
 
 ```bash
-docker compose down -v
+docker compose --env-file infra/.env -f infra/docker-compose.yml \
+  up -d --no-deps --force-recreate gateway
 ```
 
----
+## Operations
 
-# Updating Services
-
-After making code changes:
-
-Rebuild containers:
+Use explicit Compose paths from the repository root:
 
 ```bash
-docker compose up --build
+docker compose --env-file infra/.env -f infra/docker-compose.yml ps
+docker compose --env-file infra/.env -f infra/docker-compose.yml logs -f gateway worker
+curl http://localhost:8080/ready
+curl http://localhost:8080/health
 ```
 
-Or rebuild a single service:
+Rebuild or scale:
 
 ```bash
-docker compose up --build worker
+docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --build
+docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --scale worker=3
 ```
 
----
+Database row locks coordinate worker claims and schedule dispatch. Health
+checks cover gateway readiness, dashboard availability, dependencies, and
+worker heartbeat freshness. A degraded Redis check does not erase durable jobs.
 
-# Future Improvements
+Stop the base stack while preserving data:
 
-Potential deployment enhancements include:
+```bash
+docker compose --env-file infra/.env -f infra/docker-compose.yml down
+```
 
-* Kubernetes deployment
-* GitHub Actions CI/CD
-* Automated Docker image publishing
-* Blue/Green deployments
-* Infrastructure as Code (Terraform or AWS CDK)
-* Automated security scanning during deployment
+For development dependencies, include `-f infra/compose.dev.yml` in the same
+command. Adding `-v` removes named volumes, including the database; use it
+only when intentionally discarding installation data.
+
+The default deployment is HTTP on loopback. For access beyond your machine,
+configure TLS and network access controls, keep secrets private, and back up
+PostgreSQL. A new `POSTGRES_PASSWORD` environment value does not change the
+password already stored in an initialized PostgreSQL volume.
