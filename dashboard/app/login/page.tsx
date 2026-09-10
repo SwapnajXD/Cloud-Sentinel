@@ -1,64 +1,17 @@
-"use client";
-
-import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { useAuth } from "@/lib/auth-context";
-import AuthCard from "@/components/auth/AuthCard";
-import RadarSweep from "@/components/sentinel/RadarSweep";
-
+'use client';
+import { FormEvent, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { apiRequest } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
+import { Button, Field, Icon, Notice } from '@/components/console/primitives';
 export default function LoginPage() {
-  const { token, ready } = useAuth();
-  const router = useRouter();
-  const [expiredNotice, setExpiredNotice] = useState(false);
-
-  useEffect(() => {
-    if (ready && token) router.replace("/");
-  }, [ready, token, router]);
-
-  useEffect(() => {
-    if (sessionStorage.getItem("sentinel:signed-out-reason") === "expired") {
-      setExpiredNotice(true);
-      sessionStorage.removeItem("sentinel:signed-out-reason");
-    }
-  }, []);
-
-  return (
-    <main className="min-h-screen flex items-center justify-center overflow-hidden relative px-6 py-12">
-      {/* ambient dot-grid field */}
-      <div className="absolute inset-0 dot-grid opacity-40 pointer-events-none" />
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          background:
-            "radial-gradient(circle at 30% 45%, rgba(63,199,192,0.08), transparent 55%)",
-        }}
-      />
-
-      <div className="relative flex flex-col lg:flex-row items-center gap-16 max-w-4xl w-full">
-        <div className="relative flex items-center justify-center lg:justify-start shrink-0">
-          <RadarSweep size={280} />
-          <div className="absolute max-w-[220px] text-left">
-            <p className="text-xs uppercase tracking-[0.2em] text-signal mb-3">
-              Cloud-Sentinel
-            </p>
-            <h1 className="display text-3xl font-bold text-mist leading-tight mb-3">
-              Standing watch over your AWS perimeter.
-            </h1>
-            <p className="text-sm text-haze leading-relaxed">
-              Sign in to run a scan and see exactly what&rsquo;s exposed.
-            </p>
-          </div>
-        </div>
-
-        <div className="flex flex-col gap-4 items-stretch">
-          {expiredNotice && (
-            <div className="rounded-lg border border-medium/30 bg-medium/10 text-medium text-sm px-4 py-3 max-w-sm">
-              Your session expired. Sign in again to continue.
-            </div>
-          )}
-          <AuthCard />
-        </div>
-      </div>
-    </main>
-  );
+  const { token, ready, signIn, signUp } = useAuth(); const router = useRouter();
+  const [registrationOpen, setRegistrationOpen] = useState<boolean | null>(null); const [email, setEmail] = useState(''); const [password, setPassword] = useState(''); const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [expired, setExpired] = useState(false);
+  async function loadSetup() { try { const setup = await apiRequest<{ registration_open: boolean }>('/api/setup'); setRegistrationOpen(setup.registration_open); setError(''); } catch { setError('Unable to reach the gateway. Check that the application is running, then retry.'); } }
+  useEffect(() => { void loadSetup(); setExpired(sessionStorage.getItem('sentinel:signed-out-reason') === 'expired'); sessionStorage.removeItem('sentinel:signed-out-reason'); }, []);
+  useEffect(() => { if (ready && token) router.replace('/'); }, [ready, token, router]);
+  async function submit(event: FormEvent) { event.preventDefault(); setBusy(true); setError(''); try { if (registrationOpen) await signUp(email.trim().toLowerCase(), password); else await signIn(email.trim().toLowerCase(), password); } catch (err) { setError(err instanceof Error ? err.message : 'Authentication failed'); } finally { setBusy(false); } }
+  return <main className="auth-page"><aside className="auth-aside"><div className="brand"><span className="brand-mark"><Icon name="shield" size={27}/></span><span>cloud<span className="brand-light">sentinel</span><small>SECURITY OPERATIONS</small></span></div><div className="auth-story"><div className="eyebrow">VISIBILITY. EVIDENCE. CONTROL.</div><h1>Know your cloud.<br/><em>Own your security.</em></h1><p>A clear view of configuration risk across your AWS infrastructure. Built for the operator behind the environment.</p><div className="auth-principles"><div><span>Assessment model</span><strong>READ-ONLY</strong></div><div><span>Evidence source</span><strong>AWS APIs</strong></div><div><span>Access model</span><strong>SINGLE OWNER</strong></div></div></div><div className="auth-aside-footer">CLOUD SECURITY / BUILT ON OBSERVABLE EVIDENCE</div></aside>
+    <section className="auth-main"><div className="auth-form"><div className="eyebrow">PERSONAL WORKSPACE</div><h2>{registrationOpen ? 'Initialize your workspace' : 'Welcome back'}</h2><p>{registrationOpen ? 'Create the single owner account for this installation. Registration closes after setup.' : 'Sign in to inspect your infrastructure and manage security assessments.'}</p>{expired && <Notice tone="warning">Your session expired. Sign in again to continue.</Notice>}{error && <Notice tone="error">{error}{registrationOpen === null && <button className="text-button" onClick={() => void loadSetup()}>Retry connection</button>}</Notice>}
+    <form onSubmit={submit}><Field label="Email address"><input type="email" autoComplete="username" required value={email} onChange={e => setEmail(e.target.value)} placeholder="you@example.com"/></Field><Field label="Password" hint={registrationOpen ? 'At least 12 characters; maximum 72 UTF-8 bytes.' : undefined}><input type="password" autoComplete={registrationOpen ? 'new-password' : 'current-password'} minLength={registrationOpen ? 12 : 1} required value={password} onChange={e => setPassword(e.target.value)}/></Field><Button type="submit" disabled={busy || registrationOpen === null}>{busy ? 'Authenticating…' : registrationOpen ? 'Create owner account' : 'Sign in to workspace'}<Icon name="arrow" size={16}/></Button></form><p className="auth-note">Your infrastructure stays under your control.<br/>CloudSentinel inspects configuration; it does not modify AWS resources.</p></div></section></main>;
 }

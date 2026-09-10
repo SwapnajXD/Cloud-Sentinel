@@ -1,53 +1,22 @@
 import { NextResponse } from 'next/server';
-
-const BACKEND_URL =
-  process.env.BACKEND_URL || (process.env.NODE_ENV === 'development' ? 'http://localhost:3000' : 'http://gateway:3000');
-
-async function proxyRequest(request: Request, path: string[]) {
+export const dynamic = 'force-dynamic';
+const BACKEND_URL = process.env.BACKEND_URL || 'http://localhost:3000';
+async function proxy(request: Request, context: { params: { path: string[] } }) {
   const url = new URL(request.url);
-  const target = new URL(`${BACKEND_URL}/api/${path.join('/')}`);
+  const target = new URL(`/api/${context.params.path.map(encodeURIComponent).join('/')}`, BACKEND_URL);
   target.search = url.search;
-
-  const headers = new Headers(request.headers);
-  headers.delete('host');
-
-  const init: RequestInit = {
-    method: request.method,
-    headers,
-    redirect: 'manual',
-  };
-
-  if (request.method !== 'GET' && request.method !== 'HEAD') {
-    init.body = await request.text();
-  }
-
-  const response = await fetch(target, init);
-  const responseHeaders = new Headers(response.headers);
-  responseHeaders.delete('content-encoding');
-  responseHeaders.delete('transfer-encoding');
-
-  return new NextResponse(await response.text(), {
-    status: response.status,
-    headers: responseHeaders,
-  });
+  // Forward only necessary headers; never trust client-supplied proxy headers.
+  const headers = new Headers({ 'Content-Type': 'application/json' });
+  const authorization = request.headers.get('authorization');
+  if (authorization) headers.set('authorization', authorization);
+  try {
+    const response = await fetch(target, { method: request.method, headers, cache: 'no-store', redirect: 'error',
+      signal: AbortSignal.timeout(25000), body: ['GET', 'HEAD'].includes(request.method) ? undefined : await request.text() });
+    return new NextResponse(await response.text(), { status: response.status, headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' } });
+  } catch { return NextResponse.json({ error: 'Gateway unavailable. Retry shortly.' }, { status: 502 }); }
 }
-
-export async function GET(request: Request, context: { params: { path: string[] } }) {
-  return proxyRequest(request, context.params.path);
-}
-
-export async function POST(request: Request, context: { params: { path: string[] } }) {
-  return proxyRequest(request, context.params.path);
-}
-
-export async function PUT(request: Request, context: { params: { path: string[] } }) {
-  return proxyRequest(request, context.params.path);
-}
-
-export async function PATCH(request: Request, context: { params: { path: string[] } }) {
-  return proxyRequest(request, context.params.path);
-}
-
-export async function DELETE(request: Request, context: { params: { path: string[] } }) {
-  return proxyRequest(request, context.params.path);
-}
+export const GET = proxy;
+export const POST = proxy;
+export const PATCH = proxy;
+export const PUT = proxy;
+export const DELETE = proxy;
