@@ -17,6 +17,33 @@ curl http://localhost:8080/health
 Redis and a worker heartbeat within 90 seconds; 503 means degraded health.
 The response's `checks` object identifies the affected dependency.
 
+## NGINX unhealthy while the gateway is healthy
+
+If NGINX's `/ready` probe returns 404 or 502 after rebuilding services, it may
+have an old configuration or a stale upstream address. Compare the gateway
+directly with the proxy:
+
+```bash
+curl -i http://127.0.0.1:3000/ready
+curl -i http://127.0.0.1:8080/ready
+```
+
+The current NGINX configuration refreshes service addresses through Docker DNS.
+Recreate NGINX to load it, including a fresh bind mount of the configuration:
+
+```bash
+sudo docker compose --env-file infra/.env -f infra/docker-compose.yml up -d --no-deps --force-recreate nginx
+curl -i http://127.0.0.1:8080/ready
+```
+
+Allow up to 30 seconds for the next health check. If the response is still
+unexpected, inspect the loaded configuration and recent errors:
+
+```bash
+sudo docker exec cloud-sentinel-nginx-1 nginx -T
+sudo docker logs --tail=50 cloud-sentinel-nginx-1
+```
+
 ## Forgotten owner password or registration closed
 
 Registration closes when an owner exists, enforced by PostgreSQL. Setting
@@ -47,16 +74,17 @@ Verify the intended CLI profile:
 aws sts get-caller-identity
 ```
 
-After authenticating the profile, refresh exported credentials and recreate
-the stack through the launch script:
+Refresh exported credentials and recreate the stack through the launch script.
+It runs `aws login` if the selected profile cannot export credentials:
 
 ```bash
-./start.sh --refresh-aws
+./start.sh
 ```
 
-Plain `./start.sh` and `docker compose restart worker` do not refresh the
-credential file or recreate container environment values. Workload IAM roles
-can supply credentials without `.aws.env`.
+Set `AWS_PROFILE=my-profile` for a named login profile. `docker compose restart
+worker` does not reload credentials; rerun `./start.sh` instead. Workload IAM
+roles can supply credentials without `.aws.env`; use `--skip-aws-refresh` to
+skip local export.
 
 For an AssumeRole failure, verify the selected role, trusted worker principal,
 matching External ID, and worker permission to assume that role. A saved

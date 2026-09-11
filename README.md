@@ -53,15 +53,19 @@ openssl rand -hex 32
 Set `JWT_SECRET` and `POSTGRES_PASSWORD` in `infra/.env` to the two separately
 generated values. The JWT secret must have at least 32 characters.
 
-To export your authenticated AWS CLI profile's credentials and launch:
+To use your AWS console login credentials and launch (AWS CLI v2 required):
 
 ```bash
-./start.sh --refresh-aws
+aws login
+./start.sh
 ```
 
 This writes credentials to the ignored `.aws.env` file with private file
-permissions. Refresh again when temporary credentials expire. To use an
-existing `.aws.env` or a workload IAM role, launch with `./start.sh`.
+permissions on every start. If export fails, the script runs `aws login` and
+retries. Use `AWS_PROFILE=my-profile ./start.sh` for a named profile. Rerun
+`./start.sh` when temporary container credentials expire; they do not refresh
+inside the running container. To use an existing `.aws.env` or a workload IAM
+role, launch with `./start.sh --skip-aws-refresh`.
 
 Open **http://localhost:8080** and create the owner account. Registration
 closes after that account exists. Passwords require at least 12 characters

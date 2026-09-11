@@ -42,19 +42,22 @@ cannot enable multiple users.
 
 ## Start the container stack
 
-With an authenticated AWS CLI profile:
+With an AWS CLI v2 console login profile:
 
 ```bash
-./start.sh --refresh-aws
+aws login
+./start.sh
 ```
 
-Credential refresh is explicit. It exports to the ignored `.aws.env` file
-using private file permissions, then starts Compose with a build. Repeat
-when temporary credentials expire. If using an existing credential file or
-a workload IAM role, start with:
+Every start exports to the ignored `.aws.env` file using private permissions,
+then starts Compose with a build. If export fails, the script runs `aws login`
+and retries. Use `AWS_PROFILE=my-profile ./start.sh` for a named profile. The
+legacy `--refresh-aws` flag still works. Repeat when temporary credentials
+expire: exported container credentials do not refresh automatically. If using
+an existing credential file or a workload IAM role, start with:
 
 ```bash
-./start.sh
+./start.sh --skip-aws-refresh
 ```
 
 The worker loads `.aws.env` when present; it can otherwise use boto3's normal

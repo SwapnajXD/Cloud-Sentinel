@@ -27,10 +27,12 @@ maintained code snapshot, not a live AWS support feed.
 ## Credentials and connected accounts
 
 With no `connection_id`, the worker uses boto3's configured credential chain.
-For local AWS CLI credentials, `./start.sh --refresh-aws` explicitly writes
-an ignored `.aws.env` file and starts the containers. Plain `./start.sh` does
-not refresh credentials. See [Deployment](DEPLOYMENT.md) for local development
-and workload-role alternatives.
+For local `aws login` credentials, `./start.sh` refreshes the ignored `.aws.env`
+file before starting containers. It runs `aws login` if export fails, then retries.
+Set `AWS_PROFILE` to select a named profile. Rerun the script when the exported
+credentials expire; container environment credentials do not refresh automatically.
+Use `--skip-aws-refresh` to reuse the file or use a workload role. See
+[Deployment](DEPLOYMENT.md) for local development and workload-role alternatives.
 
 To connect another AWS account you own:
 
