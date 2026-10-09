@@ -55,6 +55,11 @@ Manual audits and recurring schedules accept these shared fields:
 Floci requires a configured `FLOCI_ENDPOINT` and cannot use a connection ID.
 The API does not automatically choose a connected account when the ID is
 omitted. An explicit connection must exist, be active, and belong to the owner.
+For AWS scans, a fresh worker heartbeat reporting missing, expired, or invalid
+worker credentials returns 409 before the job is queued. Unknown or stale
+credential health does not block the durable queue; the worker reports an
+actionable task error if authentication fails during execution. Floci scans do
+not require AWS credentials.
 
 ## Audits and task history
 
@@ -275,7 +280,12 @@ degrades health even though database-backed scan processing can continue.
 `GET /api/system` requires authentication and returns health plus `single_user`,
 `region`, `services`, `ai_configured`, `floci_configured`, `template_url`,
 `trusted_principal_arn`, `retry_limit`, `scheduler_poll_seconds`, and `version`.
-Secret values are omitted.
+It also returns `aws_credentials: { status, error_code, checked_at }`, using
+only safe status metadata (`ready`, `expired`, `invalid`, `missing`,
+`unavailable`, or `unknown`); secret values are omitted. The worker validates
+its configured identity with STS every 60 seconds. This does not pre-validate a
+selected account's AssumeRole trust or service permissions; those are checked
+when the scan runs.
 
 ## Example workflow
 

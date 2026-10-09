@@ -59,6 +59,28 @@ def report_task(services=('s3',), mode='aws'):
 
 
 class DurableWorkerTests(unittest.TestCase):
+    def test_worker_credential_check_reports_expired_session_without_network_call(self):
+        expired = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+        with patch.dict(os.environ, {'AWS_CREDENTIAL_EXPIRATION': expired}), patch.object(worker.boto3, 'client') as client_factory:
+            self.assertEqual(worker.check_worker_aws_credentials(), ('expired', 'ExpiredToken'))
+        client_factory.assert_not_called()
+
+    def test_worker_credential_check_verifies_identity_with_sts(self):
+        sts = client(get_caller_identity={'Account': '123456789012'})
+        with patch.dict(os.environ, {}, clear=True), patch.object(worker.boto3, 'client', return_value=sts) as client_factory:
+            self.assertEqual(worker.check_worker_aws_credentials(), ('ready', None))
+        client_factory.assert_called_once()
+
+    def test_credential_failure_is_actionable_and_not_retried(self):
+        conn, _ = connection()
+        with patch.object(worker, 'get_db_connection', return_value=conn), \
+             patch.object(worker, 'get_aws_clients', side_effect=aws_error('ExpiredToken')), \
+             patch.object(worker, 'fail_task') as fail:
+            result = worker.process_task(task())
+        self.assertEqual(result['status'], 'error')
+        self.assertIn('credentials expired', result['error'])
+        self.assertFalse(fail.call_args.kwargs['retryable'])
+
     def test_claim_recovers_expired_jobs_and_claims_due_jobs_with_lock(self):
         conn, cursor = connection([task()])
         self.assertEqual(worker.claim_task(conn)['task_id'], 'task-1')
@@ -105,7 +127,7 @@ class DurableWorkerTests(unittest.TestCase):
                 conn.close.assert_called_once()
 
     def test_retry_backoff_and_exhaustion(self):
-        for attempt, status, delay in [(1, 'queued', 5), (3, 'queued', 20), (4, 'error', 40)]:
+        for attempt, status, delay in [(1, 'queued', 5), (3, 'queued', 20), (4, 'error', 0)]:
             with self.subTest(attempt=attempt), patch.object(worker, 'log'):
                 conn, cursor = connection()
                 with patch.object(worker, 'MAX_TASK_RETRIES', 3), patch.object(worker, 'TASK_RETRY_DELAY_SECONDS', 5):
@@ -115,6 +137,13 @@ class DurableWorkerTests(unittest.TestCase):
                 self.assertIn('lease_token=%s', sql)
                 conn.rollback.assert_called_once()
                 conn.commit.assert_called_once()
+
+    def test_non_retryable_task_failure_is_final_immediately(self):
+        conn, cursor = connection()
+        message = 'AWS credentials expired. Refresh the worker AWS session and retry.'
+        worker.fail_task(conn, task(attempts=1), message, retryable=False)
+        args = cursor.execute.call_args.args[1]
+        self.assertEqual((args[0], args[1], args[3]), ('error', message, 0))
 
     def test_process_uses_owned_connection_and_scope(self):
         conn, _ = connection()

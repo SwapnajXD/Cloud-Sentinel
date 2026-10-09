@@ -31,6 +31,10 @@ SCHEDULER_POLL_SECONDS = max(1, int(os.getenv('SCHEDULER_POLL_SECONDS', '30')))
 LEASE_SECONDS = max(30, int(os.getenv('JOB_LEASE_SECONDS', '120')))
 WORKER_ID = str(uuid.uuid4())
 SERVICES = ['s3', 'ec2', 'iam', 'rds', 'lambda']
+AWS_CREDENTIAL_CHECK_SECONDS = 60
+EXPIRED_CREDENTIAL_CODES = {'ExpiredToken', 'ExpiredTokenException', 'RequestExpired', 'TokenRefreshRequired'}
+INVALID_CREDENTIAL_CODES = {'InvalidClientTokenId', 'UnrecognizedClientException', 'SignatureDoesNotMatch'}
+MISSING_CREDENTIAL_CODES = {'NoCredentialsError', 'PartialCredentialsError'}
 
 
 def log(event, **fields):
@@ -41,6 +45,40 @@ def safe_error(error):
     # SDK response messages can include URLs/policies. Log stable codes only.
     response = getattr(error, 'response', {})
     return response.get('Error', {}).get('Code', type(error).__name__)
+
+
+def credential_issue(error):
+    """Return a safe, actionable worker-auth failure without provider details."""
+    code = safe_error(error)
+    if code in EXPIRED_CREDENTIAL_CODES:
+        return 'expired', 'AWS credentials expired. Refresh the worker AWS session (for example, rerun ./start.sh) and retry this scan.'
+    if code in INVALID_CREDENTIAL_CODES:
+        return 'invalid', 'Worker AWS credentials are invalid. Reauthenticate the configured AWS identity and retry this scan.'
+    if code in MISSING_CREDENTIAL_CODES:
+        return 'missing', 'No AWS credentials are available to the worker. Configure its AWS identity and retry this scan.'
+    return None
+
+
+def check_worker_aws_credentials():
+    """Validate the worker identity using STS; return status and safe error code."""
+    expiration = os.getenv('AWS_CREDENTIAL_EXPIRATION')
+    if expiration:
+        try:
+            expires_at = datetime.fromisoformat(expiration.replace('Z', '+00:00'))
+            if expires_at.tzinfo is None:
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if expires_at <= datetime.now(timezone.utc):
+                return 'expired', 'ExpiredToken'
+        except ValueError:
+            pass  # Validate the actual provider credentials if the optional hint is malformed.
+    try:
+        boto3.client('sts', region_name=AWS_REGION, config=Config(connect_timeout=5, read_timeout=10, retries={'max_attempts': 1})).get_caller_identity()
+        return 'ready', None
+    except Exception as error:
+        issue = credential_issue(error)
+        if issue:
+            return issue[0], safe_error(error)
+        return 'unavailable', safe_error(error)
 
 
 def get_db_connection():
@@ -130,10 +168,10 @@ def complete_task(conn, row, report):
     return report_id
 
 
-def fail_task(conn, row, error):
+def fail_task(conn, row, error, retryable=True):
     conn.rollback()
-    retry = row['attempts'] <= MAX_TASK_RETRIES
-    delay = min(300, TASK_RETRY_DELAY_SECONDS * 2 ** (row['attempts'] - 1))
+    retry = retryable and row['attempts'] <= MAX_TASK_RETRIES
+    delay = min(300, TASK_RETRY_DELAY_SECONDS * 2 ** (row['attempts'] - 1)) if retry else 0
     with conn.cursor() as cursor:
         cursor.execute("""UPDATE audit_tasks SET status=%s,error=%s,progress=%s,available_at=NOW()+make_interval(secs=>%s),
             lease_token=NULL,lease_until=NULL,updated_at=NOW() WHERE task_id=%s AND lease_token=%s AND status='running'""",
@@ -201,8 +239,9 @@ def process_task(row, conn=None, aws_clients=None):
             duration_sec=report['duration_sec'], partial=report.get('partial'), **context)
         return {'status': 'ok' if report_id else 'stale', 'report_id': report_id}
     except Exception as error:
-        reason = str(error) if isinstance(error, (ValueError, RuntimeError)) else safe_error(error)
-        fail_task(conn, row, reason)
+        issue = credential_issue(error)
+        reason = issue[1] if issue else str(error) if isinstance(error, (ValueError, RuntimeError)) else safe_error(error)
+        fail_task(conn, row, reason, retryable=issue is None)
         return {'status': 'error', 'error': reason}
     finally:
         stop.set()
@@ -235,12 +274,24 @@ def _check_due_schedules():
 
 def maintenance():
     last_schedule = 0.0
+    last_credential_check = 0.0
+    aws_credentials_status = 'unknown'
+    aws_credentials_error = None
+    aws_credentials_checked_at = None
     while True:
         try:
+            if time.monotonic() - last_credential_check >= AWS_CREDENTIAL_CHECK_SECONDS:
+                aws_credentials_status, aws_credentials_error = check_worker_aws_credentials()
+                last_credential_check = time.monotonic()
+                aws_credentials_checked_at = datetime.now(timezone.utc)
             conn = get_db_connection()
             try:
                 with conn.cursor() as cursor:
-                    cursor.execute('INSERT INTO worker_heartbeats(worker_id) VALUES (%s) ON CONFLICT(worker_id) DO UPDATE SET updated_at=NOW()', (WORKER_ID,))
+                    cursor.execute('''INSERT INTO worker_heartbeats(worker_id,updated_at,aws_credentials_status,aws_credentials_error,aws_credentials_checked_at)
+                        VALUES (%s,NOW(),%s,%s,%s) ON CONFLICT(worker_id) DO UPDATE SET updated_at=NOW(),
+                        aws_credentials_status=EXCLUDED.aws_credentials_status,aws_credentials_error=EXCLUDED.aws_credentials_error,
+                        aws_credentials_checked_at=EXCLUDED.aws_credentials_checked_at''',
+                                   (WORKER_ID, aws_credentials_status, aws_credentials_error, aws_credentials_checked_at))
                     cursor.execute("DELETE FROM worker_heartbeats WHERE updated_at<NOW()-INTERVAL '1 day'")
                 conn.commit()
             finally:

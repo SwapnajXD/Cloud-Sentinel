@@ -82,12 +82,28 @@ async function validatedScan(req: Request) {
   if (config.mode === 'floci' && !process.env.FLOCI_ENDPOINT) throw new ClientError('Floci is not configured');
   return config;
 }
+async function workerAwsCredentialStatus() {
+  const result = await pool.query(`SELECT aws_credentials_status,aws_credentials_error,aws_credentials_checked_at
+    FROM worker_heartbeats WHERE updated_at > NOW() - INTERVAL '90 seconds'
+    ORDER BY updated_at DESC LIMIT 1`);
+  const row = result.rows[0];
+  return row ? { status: row.aws_credentials_status, error_code: row.aws_credentials_error, checked_at: row.aws_credentials_checked_at }
+    : { status: 'unknown', error_code: null, checked_at: null };
+}
+async function requireWorkerAwsCredentials(mode: string) {
+  if (mode === 'floci') return;
+  const status = await workerAwsCredentialStatus();
+  if (status.status === 'expired') throw new ClientError('Worker AWS credentials have expired. Refresh the worker AWS session (for example, rerun ./start.sh) and retry.', 409);
+  if (status.status === 'invalid') throw new ClientError('Worker AWS credentials are invalid. Reauthenticate the configured AWS identity and retry.', 409);
+  if (status.status === 'missing') throw new ClientError('No AWS credentials are available to the worker. Configure its AWS identity and retry.', 409);
+}
 async function notifyWorker(taskId: string) {
   try { if (redisClient.isOpen) await redisClient.lPush('audit_tasks', JSON.stringify({ task_id: taskId })); }
   catch { log('dispatch_deferred', { task_id: taskId }); } // PostgreSQL polling recovers the notification.
 }
 app.post('/api/audit', route(async (req, res) => {
   const config = await validatedScan(req);
+  await requireWorkerAwsCredentials(config.mode);
   const task_id = randomUUID();
   const task = { task_id, action: 'start_audit', user_id: req.user!.id, requested_at: new Date().toISOString(), ...config, params: { scope: 'selected-services' } };
   await pool.query('INSERT INTO audit_tasks(task_id,user_id,mode,connection_id,payload) VALUES ($1,$2,$3,$4,$5)',
@@ -262,14 +278,15 @@ async function health() {
 }
 app.get('/health', route(async (_req, res) => { const h = await health(); res.status(h.status === 'ok' ? 200 : 503).json(h); }));
 app.get('/ready', route(async (_req, res) => { await pool.query('SELECT 1 FROM schema_migrations LIMIT 1'); res.json({ status: 'ready' }); }));
-app.get('/api/system', route(async (_req, res) => res.json({
-  ...await health(), single_user: true, region: process.env.AWS_REGION || 'us-east-1', services: SERVICES,
-  ai_configured: Boolean(process.env.GEMINI_API_KEY), floci_configured: Boolean(process.env.FLOCI_ENDPOINT),
-  template_url: process.env.CFN_TEMPLATE_URL || process.env.NEXT_PUBLIC_CFN_TEMPLATE_URL || '',
-  trusted_principal_arn: process.env.TRUSTED_PRINCIPAL_ARN || process.env.NEXT_PUBLIC_TRUSTED_PRINCIPAL_ARN || '',
-  retry_limit: Number(process.env.MAX_TASK_RETRIES || 3), scheduler_poll_seconds: Number(process.env.SCHEDULER_POLL_SECONDS || 30),
-  version: '0.2.0',
-})));
+app.get('/api/system', route(async (_req, res) => {
+  const [runtime, aws_credentials] = await Promise.all([health(), workerAwsCredentialStatus()]);
+  res.json({ ...runtime, aws_credentials, single_user: true, region: process.env.AWS_REGION || 'us-east-1', services: SERVICES,
+    ai_configured: Boolean(process.env.GEMINI_API_KEY), floci_configured: Boolean(process.env.FLOCI_ENDPOINT),
+    template_url: process.env.CFN_TEMPLATE_URL || process.env.NEXT_PUBLIC_CFN_TEMPLATE_URL || '',
+    trusted_principal_arn: process.env.TRUSTED_PRINCIPAL_ARN || process.env.NEXT_PUBLIC_TRUSTED_PRINCIPAL_ARN || '',
+    retry_limit: Number(process.env.MAX_TASK_RETRIES || 3), scheduler_poll_seconds: Number(process.env.SCHEDULER_POLL_SECONDS || 30),
+    version: '0.2.0' });
+}));
 app.use((_req, res) => { res.status(404).json({ error: 'route not found' }); });
 app.use((error: Error & { type?: string }, _req: Request, res: Response, _next: NextFunction) => {
   const status = error instanceof ClientError ? error.status : error.type === 'entity.parse.failed' ? 400 : 500;

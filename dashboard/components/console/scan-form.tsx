@@ -29,8 +29,21 @@ export function ScanDialog({ onClose }: { onClose: () => void }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const { token } = useAuth();
-  const { refresh, connections } = useWorkspace();
+  const { refresh, connections, system } = useWorkspace();
   const router = useRouter();
+  const credentialStatus = system?.aws_credentials?.status || 'unknown';
+  const credentialBlocked = input.mode === 'aws' && ['expired', 'invalid', 'missing'].includes(credentialStatus);
+  const credentialMessage = credentialStatus === 'expired'
+    ? 'Worker AWS credentials have expired. Refresh the worker AWS session (for example, rerun ./start.sh) before scanning.'
+    : credentialStatus === 'invalid'
+      ? 'Worker AWS credentials are invalid. Reauthenticate the configured AWS identity before scanning.'
+      : credentialStatus === 'missing'
+        ? 'No AWS credentials are available to the worker. Configure its AWS identity before scanning.'
+        : credentialStatus === 'unavailable'
+          ? 'The worker could not verify its AWS credentials. Check AWS STS connectivity; the scan may fail.'
+          : credentialStatus === 'unknown'
+            ? 'The worker has not reported a recent AWS credential check. The scan may fail if its identity is unavailable.'
+            : '';
   async function submit(event: FormEvent) {
     event.preventDefault(); if (!token) return;
     setBusy(true); setError('');
@@ -42,7 +55,8 @@ export function ScanDialog({ onClose }: { onClose: () => void }) {
     <p className="muted">Run read-only configuration checks against a clearly defined account and scope.</p>
     <ScopeFields value={input} onChange={setInput}/>
     <div className="scan-confirmation"><span className="eyebrow">Selected target</span><strong>{input.mode === 'floci' ? 'Floci emulator' : accountName(input.connection_id, connections)}</strong><span className="mono">{input.region} / {input.services.length} services</span></div>
+    {input.mode === 'aws' && credentialMessage && <Notice tone={credentialBlocked ? 'error' : 'warning'}>{credentialMessage}</Notice>}
     {error && <Notice tone="error">{error}</Notice>}
-    <div className="dialog-actions"><Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button><Button type="submit" disabled={busy || !input.services.length}>{busy ? 'Submitting…' : 'Start scan'}</Button></div>
+    <div className="dialog-actions"><Button variant="secondary" onClick={onClose} disabled={busy}>Cancel</Button><Button type="submit" disabled={busy || !input.services.length || credentialBlocked}>{busy ? 'Submitting…' : 'Start scan'}</Button></div>
   </form></Dialog>;
 }

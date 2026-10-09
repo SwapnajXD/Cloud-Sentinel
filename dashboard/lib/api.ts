@@ -46,6 +46,7 @@ export type Schedule = {
 export type SystemStatus = {
   status: string; checks: Record<string, string>; uptime: number; single_user: boolean;
   region: string; services: string[]; ai_configured: boolean; floci_configured: boolean;
+  aws_credentials?: { status: 'unknown' | 'ready' | 'expired' | 'invalid' | 'missing' | 'unavailable'; error_code: string | null; checked_at: string | null };
   template_url: string; trusted_principal_arn: string; retry_limit: number; scheduler_poll_seconds: number; version: string;
 };
 export type ScanInput = { mode: 'aws' | 'floci'; connection_id: number | null; region: string; services: string[] };

@@ -86,6 +86,13 @@ worker` does not reload credentials; rerun `./start.sh` instead. Workload IAM
 roles can supply credentials without `.aws.env`; use `--skip-aws-refresh` to
 skip local export.
 
+The scan dialog reports the worker's most recent STS credential check. A fresh
+`expired`, `invalid`, or `missing` status prevents AWS scans from being queued.
+If credentials expire after that check, the task fails immediately with a
+refresh instruction instead of consuming the normal retry budget. Floci scans
+do not use AWS credentials. A saved AssumeRole connection's trust and service
+permissions are still verified only during a scan.
+
 For an AssumeRole failure, verify the selected role, trusted worker principal,
 matching External ID, and worker permission to assume that role. A saved
 connection is not proof that AWS access works. Disconnected connections cannot

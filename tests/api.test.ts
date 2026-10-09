@@ -78,14 +78,34 @@ describe('owner authentication', () => {
   });
 });
 describe('durable scan API', () => {
+  test('system status exposes only safe worker credential health metadata', async () => {
+    const checkedAt = '2026-10-09T19:00:00.000Z';
+    mockQuery.mockResolvedValueOnce({ rows: [{ alive: true }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ aws_credentials_status: 'expired', aws_credentials_error: 'ExpiredToken', aws_credentials_checked_at: checkedAt }], rowCount: 1 });
+    const res = await request(app).get('/api/system').set(auth());
+    expect(res.status).toBe(200);
+    expect(res.body.aws_credentials).toEqual({ status: 'expired', error_code: 'ExpiredToken', checked_at: checkedAt });
+    expect(JSON.stringify(res.body.aws_credentials)).not.toMatch(/access.?key|secret.?access|session.?token|credential.?value/i);
+  });
+
   test('accepted task survives a Redis failure and preserves connection/scope', async () => {
-    mockQuery.mockResolvedValueOnce({ rows: [{ id: 7 }], rowCount: 1 }).mockResolvedValueOnce({ rows: [], rowCount: 1 });
+    mockQuery.mockResolvedValueOnce({ rows: [{ id: 7 }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 1 });
     mockLPush.mockRejectedValue(new Error('offline'));
     const res = await request(app).post('/api/audit').set(auth()).send({ connection_id: 7, region: 'ap-south-1', services: ['ec2', 'iam'] });
     expect(res.status).toBe(202);
-    const payload = JSON.parse(mockQuery.mock.calls[1][1][4]);
+    const payload = JSON.parse(mockQuery.mock.calls[2][1][4]);
     expect(payload).toMatchObject({ connection_id: 7, region: 'ap-south-1', services: ['ec2', 'iam'], user_id: 1 });
     expect(payload.task_id).toBe(res.body.task_id);
+  });
+  test('expired worker credentials reject AWS scans before queueing', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ aws_credentials_status: 'expired' }], rowCount: 1 });
+    const res = await request(app).post('/api/audit').set(auth()).send({ region: 'ap-south-1', services: ['s3'] });
+    expect(res.status).toBe(409);
+    expect(res.body.error).toMatch(/credentials have expired.*rerun \.\/start\.sh/i);
+    expect(mockLPush).not.toHaveBeenCalled();
+    expect(mockQuery).toHaveBeenCalledTimes(1);
   });
   test.each([{ connection_id: -1 }, { connection_id: '1 OR 1=1' }, { region: 'bad' }, { mode: 'bogus' }, { services: [] }, { services: ['secrets'] }])('rejects bad scope %j', async body => {
     expect((await request(app).post('/api/audit').set(auth()).send(body)).status).toBe(400);
