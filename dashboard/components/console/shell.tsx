@@ -6,7 +6,7 @@ import { useAuth } from '@/lib/auth-context';
 import { WorkspaceProvider, useWorkspace } from './workspace';
 import { Badge, Button, Icon, Loading, Notice } from './primitives';
 import { ScanDialog } from './scan-form';
-const navigation = [['/', 'Overview', 'overview'], ['/scans', 'Scans', 'scans'], ['/findings', 'Findings', 'findings'], ['/reports', 'Reports', 'reports'], ['/accounts', 'AWS accounts', 'accounts'], ['/schedules', 'Schedules', 'schedules'], ['/settings', 'Settings', 'settings']];
+const navigation = [['/', 'Overview', 'overview'], ['/scans', 'Scans', 'scans'], ['/findings', 'Findings', 'findings'], ['/compliance', 'Compliance', 'shield'], ['/reports', 'Reports', 'reports'], ['/accounts', 'AWS accounts', 'accounts'], ['/schedules', 'Schedules', 'schedules'], ['/settings', 'Settings', 'settings']];
 export function Shell({ children }: { children: ReactNode }) {
   const { ready, token } = useAuth(); const router = useRouter();
   useEffect(() => { if (ready && !token) router.replace('/login'); }, [ready, token, router]);

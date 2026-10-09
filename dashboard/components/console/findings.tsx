@@ -23,7 +23,7 @@ export function FindingsTable({ findings, initialFinding }: { findings: Finding[
 export default function Findings() {
   const { reports, loading } = useScopedData(); const params = useSearchParams();
   const [reportId, setReportId] = useState(params.get('report') || 'latest');
-  const [query, setQuery] = useState(''); const [severity, setSeverity] = useState('all'); const [service, setService] = useState('all'); const [status, setStatus] = useState('FAIL'); const [region, setRegion] = useState('all'); const [type, setType] = useState('all');
+  const [query, setQuery] = useState(''); const [severity, setSeverity] = useState('all'); const [service, setService] = useState('all'); const [status, setStatus] = useState(params.get('finding') ? 'all' : 'FAIL'); const [region, setRegion] = useState('all'); const [type, setType] = useState('all');
   const selected: ReportRow | undefined = reportId === 'latest' ? reports[0] : reports.find(r => String(r.id) === reportId);
   const all = selected?.report.findings || [];
   const filtered = useMemo(() => all.filter(f => (severity === 'all' || f.severity === severity) && (service === 'all' || f.category === service) && (status === 'all' || statusOf(f) === status) && (region === 'all' || f.region === region) && (type === 'all' || f.type === type) && `${f.title} ${f.resource} ${f.type}`.toLowerCase().includes(query.toLowerCase())), [all, severity, service, status, region, type, query]);

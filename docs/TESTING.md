@@ -18,6 +18,7 @@ python3 -m venv .venv
 npm test --prefix gateway
 npm run typecheck --prefix gateway
 npm run build --prefix gateway
+npm test --prefix dashboard
 npm run typecheck --prefix dashboard
 npm run build --prefix dashboard
 .venv/bin/python -m unittest discover -s tests -p test_worker.py
