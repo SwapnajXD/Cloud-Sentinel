@@ -81,7 +81,9 @@ class DatabaseIntegrationTests(unittest.TestCase):
     def test_migration_ledger_and_single_owner_constraint(self):
         with self.conn.cursor() as cursor:
             cursor.execute('SELECT version FROM schema_migrations ORDER BY version')
-            self.assertEqual([row[0] for row in cursor.fetchall()], ['001_baseline.sql', '002_durable_scans.sql'])
+            self.assertEqual([row[0] for row in cursor.fetchall()], [
+                '001_baseline.sql', '002_durable_scans.sql', '003_readonly_policies.sql'
+            ])
             with self.assertRaises(psycopg2.errors.UniqueViolation):
                 cursor.execute("INSERT INTO users(email,password) VALUES ('second@example.com','test-only')")
         self.conn.rollback()
