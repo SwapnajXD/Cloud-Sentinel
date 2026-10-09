@@ -65,7 +65,7 @@ describe('owner authentication', () => {
     for (let i = 0; i < 11; i++) status = (await request(app).post('/api/login').set(headers).send({})).status;
     expect(status).toBe(429);
   });
-  test.each(['/api/reports', '/api/tasks', '/api/schedules', '/api/aws-connections', '/api/system', '/api/dead-letter'])('%s requires auth', async url => {
+  test.each(['/api/reports', '/api/reports/1/sarif', '/api/tasks', '/api/schedules', '/api/aws-connections', '/api/system', '/api/dead-letter'])('%s requires auth', async url => {
     expect((await request(app).get(url).set('X-Forwarded-For', `10.0.1.${ip++}`)).status).toBe(401);
   });
   test('deleted owner tokens are rejected', async () => {
@@ -108,6 +108,17 @@ describe('durable scan API', () => {
     expect((await request(app).get('/api/reports/9').set(auth())).status).toBe(404);
     expect(mockQuery.mock.calls[0][1]).toEqual([9, 1]);
   });
+  test('SARIF export is owner-scoped and retains incomplete assessment states', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ report: { partial: true, check_summary: { unknown: 1, skipped: 1 }, findings: [
+      { id: 'unknown', type: 'Inventory', resource: 'buckets', category: 'S3', severity: 'info', status: 'UNKNOWN' },
+      { id: 'skipped', type: 'OutsideScope', resource: 'lambda', category: 'Lambda', severity: 'good', status: 'SKIPPED' },
+    ] } }], rowCount: 1 });
+    const response = await request(app).get('/api/reports/9/sarif').set(auth());
+    expect(response.status).toBe(200);
+    expect(response.headers['content-type']).toContain('application/sarif+json');
+    expect(response.body.runs[0].results.map((result: { properties: { status: string } }) => result.properties.status)).toEqual(['UNKNOWN', 'SKIPPED']);
+    expect(mockQuery.mock.calls[0][1]).toEqual([9, 1]);
+  });
 });
 describe('connections, schedules, and failed task review', () => {
   test('schedule stores selected connection and scope', async () => {
@@ -143,6 +154,42 @@ describe('connections, schedules, and failed task review', () => {
     mockQuery.mockResolvedValue({ rowCount: 1, rows: [{ task_id: 'task-1' }] });
     expect((await request(app).delete('/api/dead-letter/task-1').set(auth())).status).toBe(200);
     expect(mockQuery.mock.calls[0][1]).toEqual(['task-1', 1]); expect(mockLPush).not.toHaveBeenCalled();
+  });
+});
+describe('read-only saved-report policies', () => {
+  const policyYaml = `apiVersion: cloud-sentinel/v1\nkind: Policy\nmetadata:\n  name: critical-failures\n  version: 1\nspec:\n  resource: finding\n  filters:\n    - field: severity\n      op: equals\n      value: critical\n    - field: status\n      op: equals\n      value: FAIL\n`;
+  test('stores a validated immutable policy version for the owner', async () => {
+    mockQuery.mockResolvedValue({ rows: [{ id: 2, name: 'critical-failures', version: 1 }], rowCount: 1 });
+    const response = await request(app).post('/api/policies').set(auth()).send({ source_yaml: policyYaml });
+    expect(response.status).toBe(201);
+    expect(mockQuery.mock.calls[0][0]).toContain('INSERT INTO policies');
+    expect(mockQuery.mock.calls[0][1].slice(0, 3)).toEqual([1, 'critical-failures', 1]);
+  });
+  test('rejects unsupported policy actions before persistence', async () => {
+    const response = await request(app).post('/api/policies').set(auth()).send({ source_yaml: policyYaml.replace('  resource: finding', '  resource: finding\n  actions: [delete]') });
+    expect(response.status).toBe(400);
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+  test('prevents reusing the same policy version', async () => {
+    mockQuery.mockRejectedValue({ code: '23505' });
+    const response = await request(app).post('/api/policies').set(auth()).send({ source_yaml: policyYaml });
+    expect(response.status).toBe(409);
+  });
+  test('evaluates only owner policy against owner report findings', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ source_yaml: policyYaml }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [{ report: { findings: [{ id: 'f1', type: 'BucketPublic', category: 'S3', resource: 'example-bucket', severity: 'critical', status: 'FAIL' }] } }], rowCount: 1 });
+    const response = await request(app).post('/api/policies/2/evaluate').set(auth()).send({ report_id: 9 });
+    expect(response.status).toBe(200);
+    expect(response.body.matches).toHaveLength(1);
+    expect(response.body.matches[0].finding_id).toBe('f1');
+    expect(mockQuery.mock.calls.map(call => call[1])).toEqual([[2, 1], [9, 1]]);
+  });
+  test('does not evaluate a report the owner cannot access', async () => {
+    mockQuery.mockResolvedValueOnce({ rows: [{ source_yaml: policyYaml }], rowCount: 1 })
+      .mockResolvedValueOnce({ rows: [], rowCount: 0 });
+    const response = await request(app).post('/api/policies/2/evaluate').set(auth()).send({ report_id: 9 });
+    expect(response.status).toBe(404);
+    expect(mockQuery).toHaveBeenCalledTimes(2);
   });
 });
 describe('AI and readiness', () => {

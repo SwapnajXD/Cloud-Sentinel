@@ -111,6 +111,17 @@ values return 400.
 - `GET /api/reports?limit=50` → `{ "reports": [...] }`, newest first.
 - `GET /api/reports/:id` → `{ "id": 42, "report": {...}, "created_at": "..." }`;
   missing or unowned reports return 404.
+- `GET /api/reports/:id/sarif` → authenticated SARIF 2.1.0 for CI consumption;
+  findings with `UNKNOWN` or `SKIPPED` status remain explicit review results.
+
+For a CI job that already has an owner token and report ID:
+
+```bash
+curl --fail --silent --show-error \
+  -H "Authorization: Bearer ${CLOUD_SENTINEL_TOKEN}" \
+  "${CLOUD_SENTINEL_URL}/api/reports/${REPORT_ID}/sarif" \
+  -o cloud-sentinel.sarif
+```
 
 Each list item has the same shape as the detail response. New report payloads
 include schema version 2, task and timing metadata, account/scope `context`,
@@ -126,6 +137,50 @@ include unknown control groups and describe partial benchmark coverage.
 
 See [AWS](AWS.md) and [Database](DATABASE.md) for the report contract. Legacy
 reports can omit the new metadata.
+
+## Read-only policies
+
+Policies are immutable YAML versions evaluated only against saved, owner-scoped
+reports. They never start scans, call AWS, or change resources. A versioned
+document has this shape:
+
+```yaml
+apiVersion: cloud-sentinel/v1
+kind: Policy
+metadata:
+  name: public-critical-findings
+  version: 1
+  description: Find critical failed checks.
+spec:
+  resource: finding
+  filters:
+    - field: status
+      op: equals
+      value: FAIL
+    - field: severity
+      op: in
+      value: [critical, high]
+  severity: high
+  remediation: Review the evidence and restrict access.
+```
+
+All filters must match. Supported fields are `type`, `category`, `resource`,
+`region`, `severity`, and `status`; operators are `equals`, `not_equals`,
+`contains`, and `in`. A policy accepts 1–10 filters and values are bounded.
+Unknown or skipped status evidence does not satisfy negative matches. Missing
+fields never match. Unsupported fields and action keys are rejected. A later
+revision uses the same name with a new positive integer `metadata.version`.
+
+| Method / route | Behavior |
+| --- | --- |
+| `GET /api/policies` | Lists the owner's saved versions, newest version first per name |
+| `POST /api/policies` | `{ "source_yaml": "..." }` → 201 with the saved immutable version; duplicate name/version returns 409 |
+| `POST /api/policies/:id/evaluate` | `{ "report_id": 42 }` → policy metadata and deterministic matches, including the finding ID and fields that matched |
+
+Evaluation excludes correlated annotations to avoid duplicate matches for
+derived risk summaries. Both the policy and report are checked against the
+current owner. Results are computed on demand and do not modify the original
+report.
 
 ## Recurring scans
 

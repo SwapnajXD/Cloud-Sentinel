@@ -17,6 +17,7 @@ images include the shared files.
 | --- | --- |
 | `001_baseline.sql` | Creates core tables, normalizes legacy timestamps as UTC, enforces ownership and cascading foreign keys, and creates the single-owner and normalized-email unique indexes |
 | `002_durable_scans.sql` | Adds job payloads, leases, retry state, partial status, report task identity, schedule scope and pause state, connection soft disconnection, indexes, and worker heartbeats |
+| `003_readonly_policies.sql` | Adds owner-scoped immutable policy versions and an index for name/version lookup |
 
 Existing databases with multiple users or invalid ownership data must be
 reviewed before migration. The migration fails on those conflicts; it does
@@ -42,6 +43,7 @@ docker compose --env-file infra/.env -f infra/docker-compose.yml exec db \
 | `audit_reports` | `id`, `user_id`, `report` JSONB, `created_at`, unique nullable `task_id` referencing `audit_tasks` |
 | `scheduled_scans` | `id`, `user_id`, `mode`, `interval_hours` (1–168), `next_run_at`, `created_at`, `connection_id`, `region`, `services` JSONB, `enabled`, `last_run_at`, `last_task_id` |
 | `worker_heartbeats` | `worker_id`, `updated_at`; supports worker availability checks |
+| `policies` | Owner, name, positive version, description, source YAML, validated JSON document, and creation time; owner deletion cascades |
 | `schema_migrations` | Applied migration filename and timestamp |
 
 All core timestamps are `TIMESTAMPTZ`. Owner-owned rows reference `users(id)`

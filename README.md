@@ -9,12 +9,17 @@ and a Next.js dashboard presents scoped findings and reports.
 - Select an AWS connection, region, and services for manual or scheduled scans.
 - Inspect S3 public access and encryption, EC2 security-group ingress, IAM MFA
   and unused access keys, RDS exposure and encryption, and Lambda access and runtimes.
+- Trace a potential EC2 administrative exposure path back to its ingress rule
+  and instance evidence without claiming end-to-end reachability.
 - Keep explicit `PASS`, `FAIL`, `UNKNOWN`, and `SKIPPED` evidence. Incomplete
   scans produce partial reports with provisional scores.
+- Author versioned, read-only YAML policies and evaluate them against saved reports.
+- Export sanitized JSON, standalone offline HTML, and SARIF 2.1.0 for CI workflows;
+  query saved finding snapshots with the restricted dashboard prototype.
 - Track durable jobs with progress, renewable leases, retries with backoff,
   and failed-job inspection and dismissal.
-- Compare reports for matching accounts and scope; inspect findings, export
-  JSON, print reports, and optionally request Gemini interpretation.
+- Compare reports for matching accounts and scope; inspect findings, print
+  reports, and optionally request Gemini interpretation.
 - Connect additional AWS accounts through AssumeRole and an External ID.
 - Use database-enforced single-owner registration and one-hour JWT sessions.
 

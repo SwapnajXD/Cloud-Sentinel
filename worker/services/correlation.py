@@ -6,22 +6,44 @@ def find_compound_risks(findings):
     failed = [f for f in findings if f.get('status') == 'FAIL']
     result = []
 
-    def related(kind, resource, title, evidence, sources, region='global'):
-        result.append(check(kind, 'Correlated', resource, 'FAIL', title, evidence,
-                            'Review and remediate the linked source findings.', region=region,
-                            identity=sorted(f['id'] for f in sources),
-                            correlates=[{'id': f['id'], 'type': f['type'], 'resource': f['resource']} for f in sources]))
+    def related(kind, resource, title, evidence, sources, region='global', attack_path=None):
+        annotation = check(kind, 'Correlated', resource, 'FAIL', title, evidence,
+                           'Review and remediate the linked source findings.', region=region,
+                           identity=sorted(f['id'] for f in sources),
+                           correlates=[{'id': f['id'], 'type': f['type'], 'resource': f['resource']} for f in sources])
+        if attack_path:
+            annotation['attack_path'] = attack_path
+        result.append(annotation)
 
     for rule in (f for f in failed if f['type'] == 'SecurityGroupOpen'):
         ports = rule.get('rule', {})
         lo, hi = ports.get('from_port'), ports.get('to_port')
         admin = ports.get('protocol') == '-1' or (ports.get('protocol') in ('tcp', '6') and lo is not None and hi is not None and any(lo <= p <= hi for p in (22, 3389)))
-        if not admin:
+        cidrs = sorted(set(ports.get('cidrs') or []) & {'0.0.0.0/0', '::/0'})
+        if not admin or not cidrs:
             continue
         for instance in (f for f in findings if f['type'] == 'EC2Instance'):
-            if rule['resource'] in instance.get('security_groups', []) and instance.get('public_ip'):
-                related('CompoundVerifiedRemoteAccess', instance['resource'], 'Public instance with open administration ingress',
-                        'An open administration rule is attached to a running instance with a public IP. Routes, NACLs and host firewalls were not tested; reachability is not verified.', [rule, instance], instance['region'])
+            if (instance.get('status') == 'SKIPPED'
+                    and rule['resource'] in instance.get('security_groups', [])
+                    and instance.get('public_ip')):
+                observed_rule = rule.get('rule', {})
+                protocol = observed_rule.get('protocol') or 'unknown protocol'
+                lo, hi = observed_rule.get('from_port'), observed_rule.get('to_port')
+                protocol_label = 'all protocols' if protocol == '-1' else protocol
+                ports = 'all ports' if protocol == '-1' else str(lo) if lo == hi else f'{lo}-{hi}'
+                path = {
+                    'confidence': 'potential',
+                    'summary': 'The security group allows administrative ingress from the internet and is attached to an instance with a public IP. End-to-end reachability was not verified.',
+                    'steps': [
+                        {'label': 'Internet source', 'resource': ', '.join(cidrs), 'finding_id': rule.get('id')},
+                        {'label': f'{protocol_label} {ports} ingress rule', 'resource': rule['resource'], 'finding_id': rule.get('id')},
+                        {'label': 'Running instance with a public IP', 'resource': instance['resource'], 'finding_id': instance.get('id')},
+                    ],
+                    'not_verified': ['Subnet route tables', 'Network ACLs', 'Host firewall rules'],
+                }
+                related('CompoundPotentialRemoteAccess', instance['resource'], 'Potential public administrative access path',
+                        'Observed configuration links an internet-open administration rule to a running instance with a public IP. This is a potential exposure path, not proof of end-to-end reachability.',
+                        [rule, instance], instance['region'], attack_path=path)
     roots = [f for f in failed if f['type'] == 'RootMFA']
     users = [f for f in failed if f['type'] == 'IAMUserMFA']
     if roots and users:

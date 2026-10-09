@@ -427,13 +427,35 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(find_compound_risks([finding('S3PublicAccess', 'UNKNOWN'), finding()]), [])
 
     def test_public_instance_correlation_requires_matching_group_and_public_ip(self):
-        rule = finding('SecurityGroupOpen', resource='sg-1', category='EC2', rule={'protocol': 'tcp', 'from_port': 22, 'to_port': 22})
+        rule = finding('SecurityGroupOpen', resource='sg-1', category='EC2', rule={'protocol': 'tcp', 'from_port': 22, 'to_port': 22, 'cidrs': ['0.0.0.0/0']})
         instance = finding('EC2Instance', 'SKIPPED', 'i-1', 'EC2', public_ip='192.0.2.1', security_groups=['sg-1'])
         self.assertEqual(len(find_compound_risks([rule, instance])), 1)
         instance['security_groups'] = ['sg-2']
         self.assertEqual(find_compound_risks([rule, instance]), [])
         instance.update(security_groups=['sg-1'], public_ip=None)
         self.assertEqual(find_compound_risks([rule, instance]), [])
+
+    def test_potential_path_requires_explicit_world_cidr_and_known_inventory(self):
+        rule = finding('SecurityGroupOpen', resource='sg-1', category='EC2', rule={'protocol': 'tcp', 'from_port': 22, 'to_port': 22})
+        instance = finding('EC2Instance', 'SKIPPED', 'i-1', 'EC2', public_ip='192.0.2.1', security_groups=['sg-1'])
+        self.assertEqual(find_compound_risks([rule, instance]), [])
+        rule['rule']['cidrs'] = ['0.0.0.0/0']
+        instance['status'] = 'UNKNOWN'
+        self.assertEqual(find_compound_risks([rule, instance]), [])
+
+    def test_public_instance_path_links_evidence_and_stays_potential(self):
+        rule = finding('SecurityGroupOpen', resource='sg-1', category='EC2', rule={
+            'protocol': '-1', 'from_port': None, 'to_port': None, 'cidrs': ['0.0.0.0/0'],
+        })
+        instance = finding('EC2Instance', 'SKIPPED', 'i-1', 'EC2', public_ip='192.0.2.1', security_groups=['sg-1'])
+        path = find_compound_risks([rule, instance])[0]
+        self.assertEqual(path['type'], 'CompoundPotentialRemoteAccess')
+        self.assertEqual(path['attack_path']['confidence'], 'potential')
+        self.assertIn('not verified', path['attack_path']['summary'].lower())
+        steps = path['attack_path']['steps']
+        self.assertEqual([step['finding_id'] for step in steps], [rule['id'], rule['id'], instance['id']])
+        self.assertIn('all protocols all ports', steps[1]['label'])
+        self.assertEqual(path['attack_path']['not_verified'], ['Subnet route tables', 'Network ACLs', 'Host firewall rules'])
 
     def test_diff_baseline_is_not_a_new_regression(self):
         rows = [finding()]
@@ -463,7 +485,7 @@ class ReportTests(unittest.TestCase):
         self.assertEqual(diff['unobserved_count'], 3)
 
     def test_diff_removed_ingress_resolves_compound_even_with_inventory_only_instance(self):
-        rule = finding('SecurityGroupOpen', resource='sg-1', category='EC2', rule={'protocol': 'tcp', 'from_port': 22, 'to_port': 22})
+        rule = finding('SecurityGroupOpen', resource='sg-1', category='EC2', rule={'protocol': 'tcp', 'from_port': 22, 'to_port': 22, 'cidrs': ['0.0.0.0/0']})
         instance = finding('EC2Instance', 'SKIPPED', 'i-1', 'EC2', public_ip='192.0.2.1', security_groups=['sg-1'])
         old = [rule, instance]
         old.extend(find_compound_risks(old))

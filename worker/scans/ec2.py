@@ -67,8 +67,8 @@ def _classify_permission(perm):
     if protocol == "-1" or (from_port is None and to_port is None):
         return (
             "critical",
-            "All ports and protocols open to the internet",
-            "Every port and protocol on this security group is reachable from anywhere on the internet.",
+            "All ports and protocols allowed from the internet",
+            "This security group allows every port and protocol from anywhere on the internet. This check does not verify end-to-end network reachability.",
         )
 
     if from_port is None or to_port is None:
@@ -79,8 +79,8 @@ def _classify_permission(perm):
         services = ", ".join(f"{RISKY_PORTS[p]} ({p})" for p in matched_risky)
         return (
             "critical",
-            f"Sensitive service exposed: {services}",
-            f"Port(s) for {services} are reachable from anywhere on the internet.",
+            f"Sensitive service ingress allowed: {services}",
+            f"This security group allows inbound traffic for {services} from anywhere on the internet. This check does not verify end-to-end network reachability.",
         )
 
     port_span = to_port - from_port
@@ -88,28 +88,28 @@ def _classify_permission(perm):
         return (
             "medium",
             f"Wide port range open: {from_port}-{to_port}",
-            f"Ports {from_port}-{to_port} are reachable from anywhere on the internet - unusually broad for a single rule.",
+            f"This security group allows inbound ports {from_port}-{to_port} from anywhere on the internet - unusually broad for a single rule. End-to-end reachability was not tested.",
         )
 
     matched_web = sorted(p for p in WEB_PORTS if from_port <= p <= to_port)
     if matched_web and from_port == to_port:
         return (
             "low",
-            f"Web port {from_port} open to the internet",
-            f"Port {from_port} is reachable from anywhere - expected for a public-facing web server, but confirm that's intentional.",
+            f"Web port {from_port} ingress allowed from the internet",
+            f"This security group allows inbound port {from_port} from anywhere. This may be expected for a public web server; confirm that it is intentional. End-to-end reachability was not tested.",
         )
 
     if from_port == to_port:
         return (
             "medium",
-            f"Port {from_port} open to the internet",
-            f"Port {from_port} ({protocol}) is reachable from anywhere on the internet.",
+            f"Port {from_port} ingress allowed from the internet",
+            f"This security group allows inbound port {from_port} ({protocol}) from anywhere on the internet. End-to-end reachability was not tested.",
         )
 
     return (
         "medium",
-        f"Ports {from_port}-{to_port} open to the internet",
-        f"Ports {from_port}-{to_port} ({protocol}) are reachable from anywhere on the internet.",
+        f"Ports {from_port}-{to_port} ingress allowed from the internet",
+        f"This security group allows inbound ports {from_port}-{to_port} ({protocol}) from anywhere on the internet. End-to-end reachability was not tested.",
     )
 
 

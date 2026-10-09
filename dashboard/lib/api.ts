@@ -7,6 +7,11 @@ export type Finding = {
   first_detected?: string | null; last_detected?: string | null;
   cis?: { control_id: string; control_title: string; version: string };
   correlates?: { id?: string; type: string; resource: string }[];
+  attack_path?: {
+    confidence: 'potential' | 'verified'; summary: string;
+    steps: { label: string; resource: string; finding_id?: string }[];
+    not_verified?: string[];
+  };
 };
 export type ScanContext = { account_id: string; connection_id: number | null; region: string; mode: string; services: string[]; schema_version?: number };
 export type Diff = {
@@ -23,6 +28,9 @@ export type Report = {
   diff?: Diff; assessment_note?: string; duration_sec?: number;
 };
 export type ReportRow = { id: number; report: Report; created_at: string };
+export type PolicyRecord = { id: number; name: string; version: number; description: string; source_yaml: string; created_at: string };
+export type PolicyMatch = { finding_id?: string; type: string; resource: string; matched_on: { field: string; op: string; value: string | string[]; actual: string }[] };
+export type PolicyEvaluation = { policy: { name: string; version: number; severity: string; remediation: string | null }; report_id: number; matches: PolicyMatch[] };
 export type Task = {
   task_id: string; status: 'queued' | 'running' | 'done' | 'partial' | 'error'; mode: string;
   connection_id: number | null; report_id: number | null; error: string | null;
@@ -60,6 +68,9 @@ export async function apiRequest<T>(endpoint: string, options: RequestInit = {},
 export const login = (email: string, password: string) => apiRequest<{ token: string }>('/api/login', { method: 'POST', body: JSON.stringify({ email, password }) });
 export const register = (email: string, password: string) => apiRequest<{ id: number; email: string }>('/api/register', { method: 'POST', body: JSON.stringify({ email, password }) });
 export const getReports = (token: string) => apiRequest<{ reports: ReportRow[] }>('/api/reports?limit=100', {}, token);
+export const getPolicies = (token: string) => apiRequest<{ policies: PolicyRecord[] }>('/api/policies', {}, token);
+export const createPolicy = (token: string, source_yaml: string) => apiRequest<PolicyRecord>('/api/policies', { method: 'POST', body: JSON.stringify({ source_yaml }) }, token);
+export const evaluateStoredPolicy = (token: string, policyId: number, reportId: number) => apiRequest<PolicyEvaluation>(`/api/policies/${policyId}/evaluate`, { method: 'POST', body: JSON.stringify({ report_id: reportId }) }, token);
 export const getTasks = (token: string) => apiRequest<{ tasks: Task[] }>('/api/tasks?limit=100', {}, token);
 export const getSchedules = (token: string) => apiRequest<{ schedules: Schedule[] }>('/api/schedules', {}, token);
 export const getAwsConnections = (token: string) => apiRequest<{ connections: AwsConnection[] }>('/api/aws-connections', {}, token);

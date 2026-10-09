@@ -1,24 +1,26 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
+import Link from 'next/link';
 import { Finding, ReportRow } from '@/lib/api';
 import { formatDate, reportScope, statusOf } from '@/lib/presentation';
 import { Badge, Button, Dialog, EmptyState, Field, Loading, Notice, PageHeading, Panel } from './primitives';
 import { useScopedData } from './overview';
-export function FindingDetail({ finding, onClose }: { finding: Finding; onClose: () => void }) {
+export function FindingDetail({ finding, onClose, reportId }: { finding: Finding; onClose: () => void; reportId?: number | string }) {
   const evidence = typeof finding.details === 'string' ? finding.details : finding.description || 'Structured evidence was recorded by an older scanner. Download the report for the original payload.';
   return <Dialog title={finding.title || finding.type} onClose={onClose} wide><div className="dialog-body finding-detail"><div className="badge-row"><Badge value={statusOf(finding)}/><Badge value={finding.severity}/>{finding.change && <Badge value={finding.change}/>}</div>
     <dl className="detail-grid"><div><dt>Resource</dt><dd className="mono break-word">{finding.resource}</dd></div><div><dt>Service / region</dt><dd>{finding.category || 'Not recorded'} / <span className="mono">{finding.region || 'Not recorded'}</span></dd></div><div><dt>First detected</dt><dd>{formatDate(finding.first_detected)}</dd></div><div><dt>Last detected</dt><dd>{formatDate(finding.last_detected)}</dd></div></dl>
     <section><h3>Scanner evidence</h3><p className="evidence">{evidence}</p></section>{finding.impact && <section><h3>Impact</h3><p>{finding.impact}</p></section>}
     <section><h3>Remediation</h3><p>{finding.remediation || (statusOf(finding) === 'PASS' ? 'No remediation is indicated by this check.' : 'Review the resource configuration and the assessment scope.')}</p></section>
     {finding.cis && <section><h3>Related CIS control</h3><p><span className="mono">{finding.cis.control_id}</span> · {finding.cis.control_title}</p><small className="muted">{finding.cis.version} · Selected check evidence, not full benchmark certification.</small></section>}
+    {finding.attack_path && <section><h3>Potential attack path</h3><p>{finding.attack_path.summary}</p><ul className="evidence-list">{finding.attack_path.steps.map((step, i) => <li key={step.finding_id || `${step.label}-${i}`}><strong>Step {i + 1}: {step.label}</strong><span className="mono">{step.finding_id && reportId ? <Link className="inline-link" href={`/findings?report=${encodeURIComponent(reportId)}&finding=${encodeURIComponent(step.finding_id)}`}>{step.resource}</Link> : step.resource}</span></li>)}</ul>{finding.attack_path.not_verified?.length ? <small className="muted">Not assessed: {finding.attack_path.not_verified.join(', ')}.</small> : null}</section>}
     {finding.correlates && <section><h3>Related observations</h3><ul className="evidence-list">{finding.correlates.map((c, i) => <li key={c.id || i}><strong>{c.type}</strong><span className="mono">{c.resource}</span></li>)}</ul></section>}
     <div className="dialog-actions"><Button variant="secondary" onClick={onClose}>Close detail</Button></div></div></Dialog>;
 }
-export function FindingsTable({ findings, initialFinding }: { findings: Finding[]; initialFinding?: string | null }) {
+export function FindingsTable({ findings, initialFinding, reportId }: { findings: Finding[]; initialFinding?: string | null; reportId?: number | string }) {
   const [detail, setDetail] = useState<Finding | null>(null);
   useEffect(() => { setDetail(initialFinding ? findings.find(f => f.id === initialFinding) || null : null); }, [initialFinding, findings]);
-  return <>{findings.length ? <div className="table-scroll"><table><thead><tr><th>Severity</th><th>Finding / resource</th><th>Service</th><th>Region</th><th>Check status</th><th>Change</th></tr></thead><tbody>{findings.map((f, i) => <tr key={f.id || `${f.type}-${f.resource}-${i}`}><td><Badge value={f.severity}/></td><td className="finding-title-cell"><button className="table-link" onClick={() => setDetail(f)}>{f.title || f.type}</button><small className="mono">{f.resource}</small></td><td>{f.category || '—'}</td><td className="mono">{f.region || 'Not recorded'}</td><td><Badge value={statusOf(f)}/></td><td className="muted">{f.change?.replaceAll('_', ' ') || 'Not compared'}</td></tr>)}</tbody></table></div> : <EmptyState title="No findings match">Try another filter or report. Empty results do not establish complete cloud coverage.</EmptyState>}{detail && <FindingDetail finding={detail} onClose={() => setDetail(null)}/>}</>;
+  return <>{findings.length ? <div className="table-scroll"><table><thead><tr><th>Severity</th><th>Finding / resource</th><th>Service</th><th>Region</th><th>Check status</th><th>Change</th></tr></thead><tbody>{findings.map((f, i) => <tr key={f.id || `${f.type}-${f.resource}-${i}`}><td><Badge value={f.severity}/></td><td className="finding-title-cell"><button className="table-link" onClick={() => setDetail(f)}>{f.title || f.type}</button><small className="mono">{f.resource}</small></td><td>{f.category || '—'}</td><td className="mono">{f.region || 'Not recorded'}</td><td><Badge value={statusOf(f)}/></td><td className="muted">{f.change?.replaceAll('_', ' ') || 'Not compared'}</td></tr>)}</tbody></table></div> : <EmptyState title="No findings match">Try another filter or report. Empty results do not establish complete cloud coverage.</EmptyState>}{detail && <FindingDetail finding={detail} reportId={reportId} onClose={() => setDetail(null)}/>}</>;
 }
 export default function Findings() {
   const { reports, loading } = useScopedData(); const params = useSearchParams();
@@ -37,6 +39,6 @@ export default function Findings() {
       ['Check status', status, setStatus, ['FAIL', 'PASS', 'SKIPPED', 'UNKNOWN']], ['Region', region, setRegion, [...new Set(all.map(f => f.region).filter((s): s is string => !!s))]],
       ['Finding type', type, setType, [...new Set(all.map(f => f.type))]],
     ].map(([label, value, setter, options]) => <Field key={String(label)} label={String(label)}><select value={String(value)} onChange={e => (setter as (v: string) => void)(e.target.value)}><option value="all">All</option>{(options as string[]).map(option => <option key={option}>{option}</option>)}</select></Field>)}</div>
-    <Panel><FindingsTable findings={filtered} initialFinding={params.get('finding')}/></Panel>
+    <Panel><FindingsTable findings={filtered} initialFinding={params.get('finding')} reportId={selected?.id}/></Panel>
   </>;
 }

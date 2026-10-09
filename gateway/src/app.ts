@@ -9,6 +9,8 @@ import { randomUUID } from 'crypto';
 import { pool, initDb } from './lib/database';
 import { signToken, authenticateJWT, TokenPayload } from './lib/auth';
 import { ClientError, id, text, password, scanConfig, SERVICES } from './lib/validation';
+import { evaluatePolicy, parsePolicy, PolicyDocument } from './lib/policies';
+import { buildSarif } from './lib/exports';
 
 export { pool, initDb };
 declare global { namespace Express { interface Request { user?: TokenPayload } } }
@@ -115,6 +117,42 @@ app.get('/api/reports/:id', route(async (req, res) => {
   const result = await pool.query('SELECT id, report, created_at FROM audit_reports WHERE id = $1 AND user_id = $2', [id(req.params.id), req.user!.id]);
   if (!result.rowCount) throw new ClientError('report not found', 404);
   res.json(result.rows[0]);
+}));
+app.get('/api/reports/:id/sarif', route(async (req, res) => {
+  const result = await pool.query('SELECT report FROM audit_reports WHERE id=$1 AND user_id=$2', [id(req.params.id), req.user!.id]);
+  if (!result.rowCount) throw new ClientError('report not found', 404);
+  res.type('application/sarif+json').json(buildSarif(result.rows[0].report));
+}));
+app.get('/api/policies', route(async (req, res) => {
+  const result = await pool.query('SELECT id,name,version,description,source_yaml,created_at FROM policies WHERE user_id=$1 ORDER BY name,version DESC', [req.user!.id]);
+  res.json({ policies: result.rows });
+}));
+app.post('/api/policies', route(async (req, res) => {
+  let policy: PolicyDocument;
+  try { policy = parsePolicy(req.body?.source_yaml); }
+  catch (error) { throw new ClientError(error instanceof Error ? error.message : 'invalid policy'); }
+  try {
+    const result = await pool.query(`INSERT INTO policies(user_id,name,version,description,source_yaml,document)
+      VALUES ($1,$2,$3,$4,$5,$6) RETURNING id,name,version,description,source_yaml,created_at`,
+    [req.user!.id, policy.metadata.name, policy.metadata.version, policy.metadata.description || '', req.body.source_yaml, JSON.stringify(policy)]);
+    res.status(201).json(result.rows[0]);
+  } catch (error) {
+    if ((error as { code?: string }).code === '23505') throw new ClientError('this policy name and version already exists', 409);
+    throw error;
+  }
+}));
+app.post('/api/policies/:id/evaluate', route(async (req, res) => {
+  const policyId = id(req.params.id);
+  const reportId = id(req.body?.report_id, 'report_id');
+  const policyResult = await pool.query('SELECT source_yaml FROM policies WHERE id=$1 AND user_id=$2', [policyId, req.user!.id]);
+  if (!policyResult.rowCount) throw new ClientError('policy not found', 404);
+  const reportResult = await pool.query('SELECT report FROM audit_reports WHERE id=$1 AND user_id=$2', [reportId, req.user!.id]);
+  if (!reportResult.rowCount) throw new ClientError('report not found', 404);
+  const policy = parsePolicy(policyResult.rows[0].source_yaml);
+  const findings = reportResult.rows[0].report?.findings;
+  if (!Array.isArray(findings)) throw new ClientError('report has no compatible findings', 422);
+  res.json({ policy: { name: policy.metadata.name, version: policy.metadata.version, severity: policy.spec.severity || 'medium', remediation: policy.spec.remediation || null },
+    report_id: reportId, matches: evaluatePolicy(policy, findings) });
 }));
 app.delete('/api/account', route(async (req, res) => {
   const confirmation = password(req.body.password);
