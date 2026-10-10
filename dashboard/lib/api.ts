@@ -19,7 +19,7 @@ export type Diff = {
   changed_count?: number; severity_changed_count?: number; unobserved_count?: number; resolved_findings?: Finding[];
 };
 export type Report = {
-  task_id?: string; schema_version?: number; requested_at?: string; completed_at?: string;
+  task_id?: string; schema_version?: number; demo?: boolean; requested_at?: string; completed_at?: string;
   context?: ScanContext; connection_label?: string; findings: Finding[];
   risk_score?: number | null; risk_grade?: string | null; partial?: boolean; score_provisional?: boolean;
   check_summary?: { pass: number; fail: number; skipped: number; unknown: number };
@@ -35,7 +35,7 @@ export type Task = {
   task_id: string; status: 'queued' | 'running' | 'done' | 'partial' | 'error'; mode: string;
   connection_id: number | null; report_id: number | null; error: string | null;
   created_at: string; updated_at: string; attempts: number; progress: string;
-  payload: { region?: string; services?: string[] };
+  payload: { region?: string; services?: string[]; demo?: boolean };
 };
 export type AwsConnection = { id: number; role_arn: string; label: string | null; region: string; active: boolean; created_at: string };
 export type Schedule = {

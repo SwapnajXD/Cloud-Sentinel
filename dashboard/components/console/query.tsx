@@ -4,6 +4,7 @@ import { FormEvent, useMemo, useState } from 'react';
 import { flattenReports, QueryField, runReportQuery } from '@/lib/query';
 import { useScopedData } from './overview';
 import { Button, EmptyState, Loading, Notice, PageHeading, Panel } from './primitives';
+import { DemoNotice } from './demo-notice';
 
 const examples = [
   { label: 'Failed checks', query: "SELECT finding_id, report_id, scanned_at, account_id, region, severity, type, resource FROM findings WHERE status = 'FAIL' ORDER BY scanned_at DESC LIMIT 100" },
@@ -26,6 +27,7 @@ export default function Query() {
   if (loading) return <Loading/>;
   return <>
     <PageHeading eyebrow="SAVED EVIDENCE" title="Query" description="Ask cross-report questions over saved finding snapshots."/>
+    {reports.some(report => report.report.demo) && <DemoNotice/>}
     <Notice>This prototype reads up to 100 saved reports in the selected account scope. Its allowlisted SQL-like grammar runs in your browser; it never executes SQL, starts a scan, or calls AWS.</Notice>
     {reports.length ? <Panel title="Read-only query" action={<span className="small muted">{reports.length} reports · {rows.length} findings</span>}>
       <form className="panel-body form-stack" onSubmit={execute}>

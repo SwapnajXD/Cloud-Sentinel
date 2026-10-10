@@ -6,6 +6,7 @@ import { Finding, ReportRow } from '@/lib/api';
 import { formatDate, reportScope, statusOf } from '@/lib/presentation';
 import { Badge, Button, Dialog, EmptyState, Field, Loading, Notice, PageHeading, Panel } from './primitives';
 import { useScopedData } from './overview';
+import { DemoNotice } from './demo-notice';
 export function FindingDetail({ finding, onClose, reportId }: { finding: Finding; onClose: () => void; reportId?: number | string }) {
   const evidence = typeof finding.details === 'string' ? finding.details : finding.description || 'Structured evidence was recorded by an older scanner. Download the report for the original payload.';
   return <Dialog title={finding.title || finding.type} onClose={onClose} wide><div className="dialog-body finding-detail"><div className="badge-row"><Badge value={statusOf(finding)}/><Badge value={finding.severity}/>{finding.change && <Badge value={finding.change}/>}</div>
@@ -33,6 +34,7 @@ export default function Findings() {
   return <><PageHeading eyebrow="INVESTIGATION" title="Findings" description="Explore evidence, understand exposure, and prioritize remediation."/>
     <div className="filter-toolbar"><Field label="Assessment"><select value={reportId} onChange={e => setReportId(e.target.value)}><option value="latest">Latest assessment</option>{reports.map(r => <option key={r.id} value={r.id}>#{r.id} · {formatDate(r.created_at)} · {reportScope(r)}</option>)}</select></Field><Field label="Search findings"><input type="search" placeholder="Search title, resource or type…" value={query} onChange={e => setQuery(e.target.value)}/></Field></div>
     {selected && <div className="report-context-line"><span className="mono">{reportScope(selected)}</span><span>{formatDate(selected.created_at)}</span><span>{filtered.length} of {all.length} observations</span></div>}
+    {selected?.report.demo && <DemoNotice/>}
     {selected && !selected.report.context && <Notice tone="warning">Legacy report: check status, region, and observation dates were not recorded. Its findings are displayed as unknown until rescanned.</Notice>}
     <div className="filter-toolbar filter-compact">{[
       ['Severity', severity, setSeverity, ['critical', 'medium', 'low', 'good', 'info']], ['Service', service, setService, [...new Set(all.map(f => f.category).filter((s): s is string => !!s))]],

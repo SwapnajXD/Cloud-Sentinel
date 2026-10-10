@@ -7,6 +7,7 @@ import { useAuth } from '@/lib/auth-context';
 import { useScopedData } from './overview';
 import { useWorkspace } from './workspace';
 import { Badge, Button, EmptyState, Field, Loading, Notice, PageHeading, Panel } from './primitives';
+import { DemoNotice } from './demo-notice';
 
 const starterPolicy = `apiVersion: cloud-sentinel/v1
 kind: Policy
@@ -79,6 +80,7 @@ export default function Policies() {
   if (reportsLoading || policyLoading) return <Loading/>;
   return <>
     <PageHeading eyebrow="CUSTOM CONTROLS" title="Policies" description="Versioned, read-only rules evaluated against saved assessment evidence."/>
+    {activeReport?.report.demo && <DemoNotice/>}
     <Notice>Policies inspect recorded findings only. They do not query AWS, change resources, or prove that unobserved conditions are safe. Every filter must match.</Notice>
     {error && <Notice tone="error">{error}</Notice>}
     {notice && <Notice tone="info">{notice}</Notice>}

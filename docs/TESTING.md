@@ -22,6 +22,7 @@ npm test --prefix dashboard
 npm run typecheck --prefix dashboard
 npm run build --prefix dashboard
 .venv/bin/python -m unittest discover -s tests -p test_worker.py
+.venv/bin/python -m unittest discover -s tests -p test_demo_data.py
 python3 -m unittest discover -s tests -p test_password_reset.py
 ```
 

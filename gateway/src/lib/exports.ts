@@ -62,7 +62,7 @@ export function buildSarif(reportValue: unknown) {
   return {
     $schema: 'https://json.schemastore.org/sarif-2.1.0.json', version: '2.1.0',
     runs: [{ tool: { driver: { name: 'Cloud-Sentinel', version: '0.2.0', rules } }, results,
-      properties: { schemaVersion: report.schema_version ?? null, context: scrub(report.context || null),
+      properties: { schemaVersion: report.schema_version ?? null, demo: report.demo === true, context: scrub(report.context || null),
         coverage: scrub(report.coverage || []), checkSummary: scrub(report.check_summary || null),
         partial: report.partial === true, scoreProvisional: report.score_provisional === true,
         cisSummary: scrub(report.cis_summary || null), assessmentNote: safeText(report.assessment_note),

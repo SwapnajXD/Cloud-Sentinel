@@ -100,6 +100,9 @@ python3 -m unittest discover -s tests -p test_password_reset.py
 [Testing](docs/TESTING.md) covers type checks, production builds, and isolated
 PostgreSQL integration tests.
 
+For a dashboard walkthrough without AWS or Floci, use the explicitly seeded
+[fictional demo reports](docs/DEMO.md).
+
 ## Project structure
 
 ```text
@@ -125,6 +128,7 @@ Cloud-Sentinel/
 - [Database and migrations](docs/DATABASE.md)
 - [Deployment and password recovery](docs/DEPLOYMENT.md)
 - [Testing](docs/TESTING.md)
+- [Offline demo data](docs/DEMO.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
 
 ## Deployment scope and limitations

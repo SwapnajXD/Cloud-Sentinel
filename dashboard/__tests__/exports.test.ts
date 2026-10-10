@@ -36,3 +36,11 @@ it('removes credential-like and internal owner fields from portable JSON', () =>
   expect(serialized).not.toMatch(/hidden|password|session_token|access_key_id|external_id/);
   expect(serialized).toContain('safe');
 });
+
+it('keeps the fictional data warning in exported HTML and JSON', () => {
+  const input = row([]);
+  input.report.demo = true;
+  const html = buildOfflineHtml(input);
+  expect(html).toContain('DEMO DATA · Fictional resources · No AWS account was scanned');
+  expect((buildPortableJson(input).report as { demo: boolean }).demo).toBe(true);
+});

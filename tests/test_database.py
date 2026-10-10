@@ -19,6 +19,7 @@ from psycopg2.extras import Json
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'worker'))
 import worker
+from demo_data import build_demo_reports, remove_reports, seed_reports
 from services.database import ensure_schema
 
 
@@ -163,6 +164,26 @@ class DatabaseIntegrationTests(unittest.TestCase):
                 cursor.execute(sql.SQL('SELECT count(*) FROM {}').format(sql.Identifier(table)))
                 self.assertEqual(cursor.fetchone()[0], 0)
         self.conn.commit()
+
+    def test_demo_seed_is_idempotent_and_never_queues_worker_jobs(self):
+        reports = build_demo_reports()
+        with patch.dict(os.environ, {'DATABASE_URL': self.dsn}):
+            seed_reports(reports)
+            seed_reports(reports)
+        with self.conn.cursor() as cursor:
+            cursor.execute('SELECT count(*) FROM audit_reports WHERE report->>\'demo\'=\'true\'')
+            self.assertEqual(cursor.fetchone()[0], 2)
+            cursor.execute('SELECT status,report_id FROM audit_tasks ORDER BY created_at')
+            tasks = cursor.fetchall()
+            self.assertEqual(len(tasks), 2)
+            self.assertTrue(all(status == 'partial' and report_id is not None for status, report_id in tasks))
+        with patch.dict(os.environ, {'DATABASE_URL': self.dsn}):
+            remove_reports(reports)
+        with self.conn.cursor() as cursor:
+            cursor.execute('SELECT count(*) FROM audit_reports')
+            self.assertEqual(cursor.fetchone()[0], 0)
+            cursor.execute('SELECT count(*) FROM audit_tasks')
+            self.assertEqual(cursor.fetchone()[0], 0)
 
 
 if __name__ == '__main__':

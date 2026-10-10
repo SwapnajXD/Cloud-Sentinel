@@ -28,4 +28,9 @@ describe('SARIF report export', () => {
     expect(run.properties.completedAt).toBe('2026-10-01T09:02:00Z');
     expect(JSON.stringify(run)).not.toContain('do-not-export');
   });
+
+  test('labels a fictional report in SARIF metadata', () => {
+    const result = buildSarif({ demo: true, findings: [] }) as { runs: { properties: { demo: boolean } }[] };
+    expect(result.runs[0].properties.demo).toBe(true);
+  });
 });

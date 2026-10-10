@@ -4,6 +4,7 @@ import type { Finding } from '@/lib/api';
 import { formatDate, reportScope, statusOf } from '@/lib/presentation';
 import { Badge, EmptyState, Loading, PageHeading, Panel } from './primitives';
 import { useScopedData } from './overview';
+import { DemoNotice } from './demo-notice';
 
 export function buildControlRows(findings: Finding[]) {
   const controls = new Map<string, { control_id: string; control_title: string; findings: Finding[] }>();
@@ -32,6 +33,7 @@ export default function Compliance() {
   return <>
     <PageHeading eyebrow="CIS AWS FOUNDATIONS" title="Compliance"
       description={latest ? `${reportScope(latest)} · ${formatDate(latest.created_at)}` : 'Review CIS control evidence from your latest assessment.'}/>
+    {latest?.report.demo && <DemoNotice/>}
     {!latest ? <Panel><EmptyState title="No assessments yet">Run an assessment to see CIS control evidence for this account context.</EmptyState></Panel> : <>
       <Panel title="CIS control coverage">
         <div className="posture">

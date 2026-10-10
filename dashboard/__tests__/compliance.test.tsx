@@ -61,6 +61,14 @@ describe('Compliance', () => {
     render(<Compliance/>);
     expect(screen.getByRole('heading', { name: 'No assessments yet' })).toBeInTheDocument();
   });
+  it('identifies fictional report evidence before showing controls', () => {
+    const latest = report([finding('1.2')]);
+    latest.report.demo = true;
+    setData([latest]);
+    render(<Compliance/>);
+    expect(screen.getByRole('status')).toHaveTextContent('No AWS account was scanned');
+    expect(screen.getByRole('table', { name: 'CIS controls' })).toBeInTheDocument();
+  });
   it('shows latest scope, aggregate coverage, control badges and finding links', () => {
     const latest = report([finding('1.2'), finding('1.10', { status: 'FAIL', id: 'failed/id&value' }), finding('2.1', { cis: undefined })]);
     setData([latest, { ...report([finding('9.9')]), id: 41 }]);
