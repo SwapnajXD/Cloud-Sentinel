@@ -4,11 +4,11 @@ import { expect, test } from '@playwright/test';
 
 test('owner can inspect fictional report evidence across the console', async ({ page }) => {
   await page.goto('/login');
-  await expect(page.getByRole('heading', { name: /Initialize your workspace|Welcome back/ })).toBeVisible();
-  const register = await page.getByRole('heading', { name: 'Initialize your workspace' }).isVisible();
+  const submit = page.getByRole('button', { name: /Create owner account|Sign in to workspace/ });
+  await expect(submit).toBeEnabled();
   await page.getByLabel('Email address').fill('demo-smoke@example.invalid');
   await page.getByLabel('Password').fill('demo-smoke-password-123');
-  await page.getByRole('button', { name: register ? 'Create owner account' : 'Sign in to workspace' }).click();
+  await submit.click();
   await expect(page.getByRole('heading', { name: 'Security overview' })).toBeVisible();
 
   execFileSync(process.env.E2E_PYTHON || 'python3', ['../../worker/demo_data.py', '--seed'], {
