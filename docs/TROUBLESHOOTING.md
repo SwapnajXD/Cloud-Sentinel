@@ -28,6 +28,9 @@ curl -i http://127.0.0.1:3000/ready
 curl -i http://127.0.0.1:8080/ready
 ```
 
+If `GATEWAY_HOST_PORT` is set in `infra/.env`, use that port instead of 3000
+for the direct gateway check. The NGINX URL is unchanged.
+
 The current NGINX configuration refreshes service addresses through Docker DNS.
 Recreate NGINX to load it, including a fresh bind mount of the configuration:
 

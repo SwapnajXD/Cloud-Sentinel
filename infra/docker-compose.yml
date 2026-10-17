@@ -38,7 +38,7 @@ services:
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       CFN_TEMPLATE_URL: ${CFN_TEMPLATE_URL:-${NEXT_PUBLIC_CFN_TEMPLATE_URL:-}}
       TRUSTED_PRINCIPAL_ARN: ${TRUSTED_PRINCIPAL_ARN:-${NEXT_PUBLIC_TRUSTED_PRINCIPAL_ARN:-}}
-    ports: ["127.0.0.1:3000:3000"]
+    ports: ["127.0.0.1:${GATEWAY_HOST_PORT:-3000}:3000"]
     depends_on:
       db: {condition: service_healthy}
       redis: {condition: service_healthy}

@@ -72,6 +72,13 @@ retries. Use `AWS_PROFILE=my-profile ./start.sh` for a named profile. Rerun
 inside the running container. To use an existing `.aws.env` or a workload IAM
 role, launch with `./start.sh --skip-aws-refresh`.
 
+For Floci-only scans, set `FLOCI_ENDPOINT` in `infra/.env` to an address the
+worker container can reach, then use `./start.sh --skip-aws-refresh`. Floci uses
+dummy credentials; no AWS login is needed. If another local service occupies
+port 3000, set `GATEWAY_HOST_PORT=3002` in `infra/.env`. The browser still opens
+at **http://localhost:8080**. See [Floci mode](docs/AWS.md#floci-mode) for
+emulator limitations.
+
 Open **http://localhost:8080** and create the owner account. Registration
 closes after that account exists. Passwords require at least 12 characters
 and at most 72 UTF-8 bytes. `SINGLE_USER_MODE=false` is no longer supported.
@@ -93,6 +100,7 @@ and `./dev.sh`. After installing dependencies:
 
 ```bash
 npm test --prefix gateway
+npm test --prefix dashboard -- --runInBand
 .venv/bin/python -m unittest discover -s tests -p test_worker.py
 python3 -m unittest discover -s tests -p test_password_reset.py
 ```
@@ -131,6 +139,7 @@ Cloud-Sentinel/
 - [Testing](docs/TESTING.md)
 - [Offline demo data](docs/DEMO.md)
 - [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [Roadmap](docs/ROADMAP.md)
 
 ## Deployment scope and limitations
 

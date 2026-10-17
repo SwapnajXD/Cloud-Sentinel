@@ -23,6 +23,7 @@ values. Keep populated environment files private. Because `dev.sh` sources
 | `POSTGRES_PASSWORD` | Required database password; Compose supplies it to PostgreSQL and both backend processes |
 | `AWS_REGION` | Default scan region, `us-east-1` |
 | `BIND_ADDRESS`, `HTTP_PORT` | NGINX host binding, `127.0.0.1:8080` |
+| `GATEWAY_HOST_PORT` | Optional direct gateway host port, default `3000`; internal routing stays on port 3000 |
 | `ALLOWED_ORIGIN` | Comma-separated browser origins; empty blocks cross-origin access in production and allows it in development |
 | `FLOCI_ENDPOINT` | Optional AWS-compatible emulator endpoint, configured on gateway and worker |
 | `MAX_TASK_RETRIES` | Retries after the first attempt, default `3` |
@@ -62,11 +63,15 @@ an existing credential file or a workload IAM role, start with:
 
 The worker loads `.aws.env` when present; it can otherwise use boto3's normal
 credential chain. Floci clients use dummy credentials. See [AWS](AWS.md).
+For Floci-only scans, configure `FLOCI_ENDPOINT` and launch with
+`./start.sh --skip-aws-refresh`; an AWS login is unnecessary.
 
 Open **http://localhost:8080**. NGINX routes API traffic to the gateway and
 pages to the dashboard. Direct dashboard and gateway ports bind to loopback
-at 3001 and 3000 respectively. PostgreSQL and Redis have no published host
-ports in the base stack.
+at 3001 and 3000 respectively by default. If port 3000 is in use, set
+`GATEWAY_HOST_PORT=3002` in `infra/.env` before starting; NGINX and the
+dashboard continue to reach the gateway on its internal port 3000. PostgreSQL
+and Redis have no published host ports in the base stack.
 
 Services are `dashboard`, `gateway`, `worker`, `redis`, `db`, and `nginx`.
 PostgreSQL and Redis use named volumes. The gateway and worker apply shared

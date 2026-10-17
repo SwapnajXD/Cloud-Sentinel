@@ -2,8 +2,10 @@
 
 The default container API is **http://localhost:8080/api**. Local development
 uses **http://localhost:3001/api** through the dashboard proxy, or the gateway
-directly at **http://localhost:3000/api**. Health/readiness probes are served
-by NGINX and the gateway outside `/api`.
+directly at **http://localhost:3000/api** by default. In the container stack,
+the direct gateway address uses `GATEWAY_HOST_PORT` when configured; NGINX
+remains at port 8080. Health/readiness probes are served by NGINX and the
+gateway outside `/api`.
 
 Requests and normal responses use JSON. Protected endpoints require:
 
