@@ -98,7 +98,8 @@ python3 -m unittest discover -s tests -p test_password_reset.py
 ```
 
 [Testing](docs/TESTING.md) covers type checks, production builds, and isolated
-PostgreSQL integration tests.
+PostgreSQL integration tests. GitHub Actions also runs a browser smoke test
+against the fictional demo reports on every push and pull request.
 
 For a dashboard walkthrough without AWS or Floci, use the explicitly seeded
 [fictional demo reports](docs/DEMO.md).

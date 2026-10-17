@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      DATABASE_URL: postgresql://postgres:sentinel-test-only@127.0.0.1:5432/cloud_sentinel_e2e
+      E2E_DATABASE_URL: postgresql://postgres:sentinel-test-only@127.0.0.1:5432/cloud_sentinel_e2e
+      REDIS_URL: redis://127.0.0.1:6379
+      JWT_SECRET: cloud-sentinel-ci-only-secret-1234567890
+      NEXT_TELEMETRY_DISABLED: '1'
+    services:
+      postgres:
+        image: postgres:15-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: sentinel-test-only
+          POSTGRES_DB: cloud_sentinel_e2e
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d cloud_sentinel_e2e"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            gateway/package-lock.json
+            dashboard/package-lock.json
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: worker/requirements.txt
+      - name: Install dependencies
+        run: |
+          npm ci --prefix gateway
+          npm ci --prefix dashboard
+          python -m pip install -r worker/requirements.txt
+      - name: Gateway tests and build
+        run: |
+          npm test --prefix gateway
+          npm run typecheck --prefix gateway
+          npm run build --prefix gateway
+      - name: Dashboard tests and build
+        run: |
+          npm test --prefix dashboard -- --runInBand
+          npm run typecheck --prefix dashboard
+          npm run build --prefix dashboard
+      - name: Worker unit tests
+        run: python -m unittest discover -s tests -p 'test_*.py'
+      - name: PostgreSQL integration tests
+        env:
+          TEST_DATABASE_URL: postgresql://postgres:sentinel-test-only@127.0.0.1:5432/cloud_sentinel_e2e
+        run: python tests/test_database.py
+      - name: Install Chromium for browser smoke test
+        run: npm exec --prefix dashboard -- playwright install --with-deps --only-shell chromium
+      - name: Browser smoke test with fictional reports
+        run: npm run test:e2e --prefix dashboard
+      - name: Upload browser failure details
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: browser-smoke-failure
+          path: |
+            dashboard/playwright-report/
+            dashboard/test-results/
+          if-no-files-found: ignore

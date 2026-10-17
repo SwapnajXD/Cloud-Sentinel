@@ -14,6 +14,7 @@ venv/
 dist/
 .next/
 out/
+*.tsbuildinfo
 
 # Python
 __pycache__/
@@ -42,6 +43,8 @@ Thumbs.db
 # Test
 coverage/
 .nyc_output/
+playwright-report/
+test-results/
 
 # Temp
 tmp/

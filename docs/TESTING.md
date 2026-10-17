@@ -69,3 +69,35 @@ docker stop cloud-sentinel-db-check
 Stop the temporary database container after the test command, including when a
 test fails. These checks validate PostgreSQL behavior; they do not exercise live
 AWS, browser interactions, or the full running Compose stack.
+
+## CI and browser smoke test
+
+[GitHub Actions](../.github/workflows/ci.yml) runs both JavaScript test suites,
+typechecks, and builds, the worker unit suite, the seven PostgreSQL integration
+tests, and a Chromium browser smoke test on every push and pull request. It uses
+ephemeral PostgreSQL and Redis service containers. No AWS credentials, Floci,
+homelab, or existing Cloud-Sentinel database is required.
+
+The browser test starts the built gateway and dashboard, creates the owner,
+seeds the [fictional demo reports](DEMO.md), then checks the overview trend,
+report export, CIS controls, finding links, and potential attack path. Failure
+screenshots, traces, and the Playwright report are uploaded by CI.
+
+To run the browser test locally, provide a **dedicated, disposable** PostgreSQL
+database named `cloud_sentinel_e2e` and Redis on localhost ports 5432 and 6379.
+The configuration refuses to run unless `DATABASE_URL` and `E2E_DATABASE_URL`
+match that dedicated database. After installing project dependencies:
+
+```bash
+export DATABASE_URL=postgresql://postgres:sentinel-test-only@127.0.0.1:5432/cloud_sentinel_e2e
+export E2E_DATABASE_URL="$DATABASE_URL"
+export E2E_PYTHON="$PWD/.venv/bin/python"
+npm run build --prefix gateway
+npm run build --prefix dashboard
+npm exec --prefix dashboard -- playwright install --only-shell chromium
+npm run test:e2e --prefix dashboard
+```
+
+Use a disposable database; the test reuses its test owner if run again. Playwright
+starts and stops the local gateway and dashboard on ports 43100 and 43101; it does
+not start PostgreSQL or Redis. The CI job creates those services automatically.
